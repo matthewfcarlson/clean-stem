@@ -33,3 +33,14 @@ def test_replace_spans_resamples_stems_and_handles_mono():
     out = replace_spans(audio, RATE, [Span(3.0, 4.0)], [window], 2 * RATE)
     assert out.shape == (1, 10 * RATE)
     assert np.allclose(out[0, int(3.2 * RATE) : int(3.8 * RATE)], 0.5, atol=1e-3)
+
+
+def test_merge_windows_and_stems_slice():
+    from clean_stem.separate import merge_windows
+
+    assert merge_windows([(5.0, 9.0), (0.0, 3.0), (2.0, 4.0), (9.0, 10.0)]) == [(0.0, 4.0), (5.0, 10.0)]
+    vocals = np.arange(10 * RATE, dtype=np.float32)[None].repeat(2, 0)
+    stems = Stems(2.0, 12.0, vocals, -vocals)
+    part = stems.slice(4.0, 5.0, RATE)
+    assert (part.start, part.end, part.vocals.shape) == (4.0, 5.0, (2, RATE))
+    assert part.vocals[0, 0] == 2 * RATE and part.instrumental[0, 0] == -2 * RATE

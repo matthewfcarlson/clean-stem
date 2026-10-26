@@ -104,7 +104,7 @@ def cmd_align(args: argparse.Namespace) -> int:
     """Find when each flagged word is sung."""
     from clean_stem.pipeline import Models, locate
 
-    models = Models(whisper_model=args.model or Models.whisper_model)
+    models = Models(whisper_model=args.model or Models.whisper_model, state=open_state(args))
     results = []
     for path in args.files:
         located = locate(path, models, args.lyrics)
@@ -237,7 +237,7 @@ def main(argv: list[str] | None = None) -> int:
     rev = sub.add_parser("reverse", help="Restore originals from .dirtystem sidecars")
     rev.add_argument("files", nargs="+", type=Path)
     rev.add_argument("--force", action="store_true", help="Restore even if the file changed since cleaning")
-    for p in (clean, rev):
+    for p in (align, clean, rev):
         p.add_argument("--state", type=Path, default=None, help="State database (default: $CLEAN_STEM_STATE or ~/.cache/clean-stem/state.db)")
         p.add_argument("--no-state", action="store_true", help="Don't read or record state, or cache lyrics")
     rev.set_defaults(func=cmd_reverse)

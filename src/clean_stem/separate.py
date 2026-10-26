@@ -16,6 +16,22 @@ class Stems:
     vocals: np.ndarray  # (2, n) float32 at the model's sample rate
     instrumental: np.ndarray  # everything except vocals, same shape
 
+    def slice(self, start: float, end: float, sample_rate: int) -> Stems:
+        lo = int(round((start - self.start) * sample_rate))
+        hi = lo + int(round((end - start) * sample_rate))
+        return Stems(start, end, self.vocals[:, lo:hi], self.instrumental[:, lo:hi])
+
+
+def merge_windows(windows: list[tuple[float, float]]) -> list[tuple[float, float]]:
+    """Merge overlapping (start, end) windows."""
+    merged: list[tuple[float, float]] = []
+    for start, end in sorted(windows):
+        if merged and start <= merged[-1][1]:
+            merged[-1] = (merged[-1][0], max(merged[-1][1], end))
+        else:
+            merged.append((start, end))
+    return merged
+
 
 class Separator:
     """Runs Demucs on song windows and remembers the stems for splicing."""
@@ -28,8 +44,21 @@ class Separator:
         self.sample_rate: int = self.model.samplerate
         self.stems: list[Stems] = []
 
+    def prefetch(self, stereo: np.ndarray, sample_rate: int, windows: list[tuple[float, float]]) -> None:
+        """Separate the union of `windows` up front, so overlapping requests
+        are served from one Demucs pass instead of several."""
+        for start, end in merge_windows(windows):
+            self.separate(stereo, sample_rate, start, end)
+
     def separate(self, stereo: np.ndarray, sample_rate: int, start: float, end: float) -> Stems:
-        """Separate stereo[:, start:end] (seconds); stereo must be at self.sample_rate."""
+        """Separate stereo[:, start:end] (seconds); stereo must be at self.sample_rate.
+
+        Reuses an already-separated window that covers the request.
+        """
+        for stems in self.stems:
+            if stems.start <= start and end <= stems.end:
+                return stems.slice(start, end, sample_rate)
+
         import torch
         from demucs.apply import apply_model
 

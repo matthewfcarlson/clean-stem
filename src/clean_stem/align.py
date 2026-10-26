@@ -171,6 +171,21 @@ def estimate_timing(text: str, token_index: int, line_start: float, line_end: fl
     )
 
 
+def line_window(lines: list[SyncedLine], idx: int, duration: float) -> tuple[float, float]:
+    """Audio to transcribe for line `idx`: padded, through the next line's start."""
+    line_end = lines[idx + 1].time if idx + 1 < len(lines) else duration
+    return max(0.0, lines[idx].time - WINDOW_PAD), min(duration, line_end + WINDOW_PAD)
+
+
+def flagged_windows(lines: list[SyncedLine], duration: float) -> list[tuple[float, float]]:
+    """Windows `align_flagged_words` will listen to."""
+    return [
+        line_window(lines, idx, duration)
+        for idx, line in enumerate(lines)
+        if any(is_profane(t) for t in tokenize(line.text))
+    ]
+
+
 def align_flagged_words(
     lines: list[SyncedLine],
     duration: float,
@@ -190,8 +205,7 @@ def align_flagged_words(
             continue
 
         line_end = lines[idx + 1].time if idx + 1 < len(lines) else duration
-        start = max(0.0, line.time - WINDOW_PAD)
-        end = min(duration, line_end + WINDOW_PAD)
+        start, end = line_window(lines, idx, duration)
 
         # The window spills into the neighbouring lines, so align against them
         # too; otherwise their words get matched to this line's.

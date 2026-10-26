@@ -89,6 +89,7 @@ def locate(path: Path, models: Models, lyrics_mode: str = "auto") -> Located | s
     vocals = align.vocals_listener(stereo, separator.sample_rate, separator, models.transcriber)
 
     if synced:
+        separator.prefetch(stereo, separator.sample_rate, align.flagged_windows(synced, track.duration))
         words = align.align_flagged_words(synced, track.duration, [("vocals", vocals), ("mix", mix)])
         # Catch profanity the lyrics leave out: scan the full mix, then confirm
         # anything unexplained on the vocals.
