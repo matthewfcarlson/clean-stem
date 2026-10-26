@@ -36,7 +36,7 @@ WORD_PAD_BEFORE = 0.15
 WORD_PAD_AFTER = 0.25
 MIN_WORD_LENGTH = 0.5
 
-_TOKEN_RE = re.compile(r"[A-Za-z0-9][A-Za-z0-9'’]*")
+_TOKEN_RE = re.compile(r"[A-Za-z0-9][A-Za-z0-9'’*]*")
 
 
 @dataclass(frozen=True)

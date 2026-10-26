@@ -40,7 +40,9 @@ WHOLE_WORD_SUFFIXES = ("", "s", "es", "ed", "in", "ing", "in'")
 
 WORD_LIST_VERSION = "1"
 
-_WORD_RE = re.compile(r"[A-Za-z][A-Za-z'’]*")
+# Asterisks are part of words so censored lyrics ("f**k", "sh*t") stay whole.
+_WORD_RE = re.compile(r"[A-Za-z][A-Za-z'’*]*")
+_CENSORED_RE = re.compile(r"^[a-z]+\*+[a-z*]*$")
 _WHOLE = {w + s for w in WHOLE_WORDS for s in WHOLE_WORD_SUFFIXES}
 
 
@@ -53,6 +55,9 @@ class Match:
 
 def is_profane(word: str) -> bool:
     normalized = word.lower().replace("’", "'").strip("'")
+    if _CENSORED_RE.match(normalized):
+        # Some lyrics sites censor words themselves; they only do that to swears.
+        return True
     if normalized in _WHOLE or normalized.rstrip("'") in _WHOLE:
         return True
     return any(root in normalized for root in ROOTS)
