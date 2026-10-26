@@ -101,34 +101,22 @@ def cmd_lyrics(args: argparse.Namespace) -> int:
 
 def cmd_align(args: argparse.Namespace) -> int:
     """Find when each flagged word is sung, using synced lyrics + Whisper."""
-    from clean_stem.align import DEFAULT_MODEL, Transcriber, align_flagged_words, mix_listener, vocals_listener
-    from clean_stem.audio import decode_mono, decode_stereo
+    from clean_stem.pipeline import Models, locate
 
-    transcriber = separator = None
+    models = Models(whisper_model=args.model or Models.whisper_model, separate=not args.no_separate)
     results = []
     for path in args.files:
-        track = read_track_info(path)
-        fetched = LrclibProvider().fetch(track) if track else None
-        if not fetched or not fetched.synced:
-            results.append({"file": str(path), "status": "no-synced-lyrics"})
+        located = locate(path, models)
+        if isinstance(located, str):
+            results.append({"file": str(path), "status": "skipped", "reason": located})
             continue
-        if transcriber is None:
-            transcriber = Transcriber(args.model or DEFAULT_MODEL)
-        listeners = [("mix", mix_listener(decode_mono(path), transcriber))]
-        if not args.no_separate:
-            if separator is None:
-                from clean_stem.separate import Separator
-
-                separator = Separator()
-            stereo = decode_stereo(path, separator.sample_rate)
-            listeners.insert(0, ("vocals", vocals_listener(stereo, separator.sample_rate, separator, transcriber)))
-        words = align_flagged_words(fetched.synced, track.duration, listeners)
+        synced = located.lyrics.synced
         results.append(
             {
                 "file": str(path),
                 "status": "aligned",
-                "lyrics_source": fetched.source,
-                "words": [{**vars(w), "line_text": fetched.synced[w.line].text} for w in words],
+                "lyrics_source": located.lyrics.source,
+                "words": [{**vars(w), "line_text": synced[w.line].text} for w in located.words],
             }
         )
 
@@ -137,11 +125,48 @@ def cmd_align(args: argparse.Namespace) -> int:
         print()
         return 0
     for result in results:
-        print(f"{result['file']}  [{result.get('lyrics_source', result['status'])}]")
+        print(f"{result['file']}  [{result.get('lyrics_source') or result['reason']}]")
         for w in result.get("words", []):
             how = f"{w['method']}/{w['source']}" if w["source"] else w["method"]
             print(f"  {w['start']:7.2f}-{w['end']:7.2f}  {how:16}  {w['word']:<14} {w['line_text']}")
     return 0
+
+
+def cmd_clean(args: argparse.Namespace) -> int:
+    """Censor files in place, keeping the originals in .dirtystem sidecars."""
+    from clean_stem.pipeline import Models, clean
+
+    models = Models(whisper_model=args.model or Models.whisper_model)
+    results = []
+    for path in args.files:
+        result = clean(path, models)
+        results.append(result)
+        if not args.json:
+            detail = result.get("reason") or result.get("lyrics_source", "")
+            if result["status"] == "cleaned":
+                detail = f"{len(result['replacements'])} words replaced  [{detail}]"
+            print(f"{result['status'].upper():9} {path}  {detail}")
+    if args.json:
+        json.dump(results, sys.stdout, indent=2)
+        print()
+    return 0
+
+
+def cmd_reverse(args: argparse.Namespace) -> int:
+    """Restore originals from their .dirtystem sidecars."""
+    from clean_stem.sidecar import ReverseError, reverse, sidecar_path
+
+    failed = 0
+    for path in args.files:
+        if not sidecar_path(path).exists():
+            print(f"{'skipped':9} {path}  (not cleaned)")
+            continue
+        try:
+            print(f"{reverse(path, force=args.force):9} {path}")
+        except ReverseError as e:
+            failed += 1
+            print(f"FAILED    {path}: {e}")
+    return 1 if failed else 0
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -164,6 +189,17 @@ def main(argv: list[str] | None = None) -> int:
     align.add_argument("--no-separate", action="store_true", help="Skip Demucs; transcribe the full mix only")
     align.add_argument("--json", action="store_true", help="Output JSON")
     align.set_defaults(func=cmd_align)
+
+    clean = sub.add_parser("clean", help="Censor files in place (originals kept in .dirtystem sidecars)")
+    clean.add_argument("files", nargs="+", type=Path)
+    clean.add_argument("--model", help="Whisper model size (default: small)")
+    clean.add_argument("--json", action="store_true", help="Output JSON")
+    clean.set_defaults(func=cmd_clean)
+
+    rev = sub.add_parser("reverse", help="Restore originals from .dirtystem sidecars")
+    rev.add_argument("files", nargs="+", type=Path)
+    rev.add_argument("--force", action="store_true", help="Restore even if the file changed since cleaning")
+    rev.set_defaults(func=cmd_reverse)
 
     args = parser.parse_args(argv)
     return args.func(args)
