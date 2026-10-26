@@ -80,19 +80,24 @@ class Transcriber:
         self.model = WhisperModel(model_name, device="cpu", compute_type="int8")
 
     def words(self, audio: np.ndarray) -> list[TimedWord]:
+        return self.transcribe(audio)[0]
+
+    def transcribe(self, audio: np.ndarray) -> tuple[list[TimedWord], float]:
+        """Words with window-relative times, plus Whisper's mean word probability."""
         segments, _ = self.model.transcribe(
             audio,
             language="en",
             word_timestamps=True,
             condition_on_previous_text=False,
         )
-        result = []
+        result, probabilities = [], []
         for segment in segments:
             for w in segment.words or []:
+                probabilities.append(w.probability)
                 # Whisper attaches punctuation; keep only the word-ish part.
                 for token in tokenize(w.word):
                     result.append(TimedWord(token, w.start, w.end))
-        return result
+        return result, (sum(probabilities) / len(probabilities) if probabilities else 0.0)
 
 
 def mix_listener(audio: np.ndarray, transcriber: Transcriber) -> Listener:
@@ -129,9 +134,14 @@ def match_words(lyric_tokens: list[str], heard: list[TimedWord], wanted: Iterabl
                 timings[i] = (w.start, w.end, "heard")
             elif j2 > j1:
                 # Replaced: the lyric words i1..i2 were heard as something else
-                # over heard[j1..j2]. Use that whole span; censoring a little
-                # extra beats missing the word.
-                timings[i] = (heard[j1].start, heard[j2 - 1].end, "inferred")
+                # over heard[j1..j2]. Assume they line up proportionally, and
+                # take the heard words covering this one's share (rounding
+                # outwards; censoring a little extra beats missing the word).
+                n, m = i2 - i1, j2 - j1
+                k = i - i1
+                first = j1 + (k * m) // n
+                last = j1 + max(-(-(k + 1) * m // n) - 1, (k * m) // n)
+                timings[i] = (heard[first].start, heard[last].end, "inferred")
             else:
                 # Not heard at all: it sits between the neighbouring words.
                 before = heard[j1 - 1].end if j1 > 0 else None
@@ -211,3 +221,39 @@ def align_flagged_words(
                 found.append(FlaggedWord(tokens[i], idx, est_start, est_end, "estimated", ""))
 
     return found
+
+
+def enrich_synced(lines: list[SyncedLine], other_texts: Iterable[str]) -> list[SyncedLine]:
+    """Add profanity that other lyric sources have but the synced lyrics lack.
+
+    Synced lyrics often drop ad-libs ("(Let's fucking go)") that a site's
+    plain lyrics or the file's embedded lyrics include. Each other text is
+    aligned against the synced lyrics word by word; profane words it has
+    extra are inserted into the synced line next to where they appear.
+    """
+    lines = list(lines)
+    for other in other_texts:
+        line_tokens = [tokenize(line.text) for line in lines]
+        flat = [(li, ti) for li, tokens in enumerate(line_tokens) for ti in range(len(tokens))]
+        if not flat:
+            break
+        ours = [normalize(line_tokens[li][ti]) for li, ti in flat]
+        theirs = tokenize(other)
+        sm = SequenceMatcher(None, ours, [normalize(t) for t in theirs], autojunk=False)
+        insertions: dict[int, list[tuple[int, str]]] = {}  # line -> [(token position, word)]
+        for tag, i1, i2, j1, j2 in sm.get_opcodes():
+            if tag == "equal" or tag == "delete":
+                continue
+            extra = [t for t in theirs[j1:j2] if is_profane(t)]
+            if not extra or (tag == "replace" and any(is_profane(ours[i]) for i in range(i1, i2))):
+                continue
+            # Attach after the last of our words before the gap (or before the
+            # first word, at the very start).
+            li, ti = flat[i2 - 1] if i2 > 0 else (flat[0][0], -1)
+            insertions.setdefault(li, []).extend((ti + 1, t) for t in extra)
+        for li, inserts in insertions.items():
+            tokens = list(line_tokens[li])
+            for pos, word in sorted(inserts, key=lambda x: x[0], reverse=True):
+                tokens.insert(pos, word)
+            lines[li] = SyncedLine(lines[li].time, " ".join(tokens))
+    return lines

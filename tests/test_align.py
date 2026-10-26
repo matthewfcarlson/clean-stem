@@ -34,7 +34,7 @@ def test_match_words_infers_misheard_word_from_neighbours():
     timings = match_words(tokens, heard("I@0.0 eat@0.3 milk@0.6 couldn't@1.0 try@1.3 me@1.5"), [2])
     start, end, method = timings[2]
     assert method == "inferred"
-    assert (start, end) == (0.0, 0.8)  # the whole misheard span before "couldn't"
+    assert (start, end) == (0.6, 0.8)  # third misheard word for the third lyric word
 
 
 def test_match_words_infers_unheard_word_between_neighbours():
@@ -90,3 +90,34 @@ def test_later_listeners_only_run_when_needed_and_best_result_wins():
     mix = FakeListener()
     align_flagged_words(lines, 5.0, [("vocals", vocals), ("mix", mix)])
     assert mix.calls == []  # everything was heard on the vocals
+
+
+def test_enrich_synced_adds_adlibs_from_other_sources():
+    from clean_stem.align import enrich_synced
+
+    lines = [SyncedLine(120.0, 'Like, "Ah"'), SyncedLine(124.0, 'Like, "Ah"'), SyncedLine(128.0, "All the time")]
+    embedded = 'Like, "Ah"\nLike, "Ah" (Let\'s fucking go)\n\nAll the time'
+    enriched = enrich_synced(lines, [embedded])
+    assert [line.text for line in enriched] == ['Like, "Ah"', "Like Ah fucking", "All the time"]
+    assert [line.time for line in enriched] == [120.0, 124.0, 128.0]
+
+
+def test_enrich_synced_ignores_clean_differences_and_existing_profanity():
+    from clean_stem.align import enrich_synced
+
+    lines = [SyncedLine(1.0, "Bloodsucker, fame fucker"), SyncedLine(3.0, "I hate to give the satisfaction")]
+    other = "Bloodsucker, fame-fucker\nHate to give the satisfaction, oh"
+    assert enrich_synced(lines, [other]) == lines
+
+
+def test_match_words_infers_within_long_misheard_stretch_proportionally():
+    tokens = tokenize("one two three goddamn five six seven eight")
+    # Everything misheard: eight lyric words over eight heard words, 1s apart.
+    transcript = heard(" ".join(f"x{i}@{i}" for i in range(8)))
+    start, end, method = match_words(tokens, transcript, [3])[3]
+    assert method == "inferred"
+    assert (start, end) == (3.0, 3.2)  # not the whole 0-7s stretch
+
+    # Fewer heard words than lyric words: spans round outwards.
+    start, end, _ = match_words(tokens, heard("x0@0 x1@1 x2@2 x3@3"), [3])[3]
+    assert (start, end) == (1.0, 1.2)

@@ -16,6 +16,7 @@ from clean_stem.lookup import (
     read_track_info,
 )
 from clean_stem.lyrics import read_embedded_lyrics
+from clean_stem.pipeline import LYRICS_MODES
 from clean_stem.profanity import WORD_LIST_VERSION, find_profanity
 
 
@@ -100,23 +101,25 @@ def cmd_lyrics(args: argparse.Namespace) -> int:
 
 
 def cmd_align(args: argparse.Namespace) -> int:
-    """Find when each flagged word is sung, using synced lyrics + Whisper."""
+    """Find when each flagged word is sung."""
     from clean_stem.pipeline import Models, locate
 
-    models = Models(whisper_model=args.model or Models.whisper_model, separate=not args.no_separate)
+    models = Models(whisper_model=args.model or Models.whisper_model)
     results = []
     for path in args.files:
-        located = locate(path, models)
+        located = locate(path, models, args.lyrics)
         if isinstance(located, str):
             results.append({"file": str(path), "status": "skipped", "reason": located})
             continue
-        synced = located.lyrics.synced
         results.append(
             {
                 "file": str(path),
                 "status": "aligned",
-                "lyrics_source": located.lyrics.source,
-                "words": [{**vars(w), "line_text": synced[w.line].text} for w in located.words],
+                "lyrics_source": located.lyrics_source,
+                "words": [
+                    {**vars(w), "line_text": located.synced[w.line].text if w.line >= 0 else None}
+                    for w in located.words
+                ],
             }
         )
 
@@ -128,7 +131,8 @@ def cmd_align(args: argparse.Namespace) -> int:
         print(f"{result['file']}  [{result.get('lyrics_source') or result['reason']}]")
         for w in result.get("words", []):
             how = f"{w['method']}/{w['source']}" if w["source"] else w["method"]
-            print(f"  {w['start']:7.2f}-{w['end']:7.2f}  {how:16}  {w['word']:<14} {w['line_text']}")
+            context = w["line_text"] or ("(not in lyrics)" if w["source"] == "vocals-scan" else "")
+            print(f"  {w['start']:7.2f}-{w['end']:7.2f}  {how:20}  {w['word']:<14} {context}")
     return 0
 
 
@@ -139,7 +143,7 @@ def cmd_clean(args: argparse.Namespace) -> int:
     models = Models(whisper_model=args.model or Models.whisper_model)
     results = []
     for path in args.files:
-        result = clean(path, models)
+        result = clean(path, models, args.lyrics)
         results.append(result)
         if not args.json:
             detail = result.get("reason") or result.get("lyrics_source", "")
@@ -169,6 +173,9 @@ def cmd_reverse(args: argparse.Namespace) -> int:
     return 1 if failed else 0
 
 
+LYRICS_HELP = "auto: synced lyrics if available; plain: ignore line timings; none: transcription only"
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(prog="clean-stem")
     sub = parser.add_subparsers(dest="command", required=True)
@@ -186,13 +193,14 @@ def main(argv: list[str] | None = None) -> int:
     align = sub.add_parser("align", help="Find timestamps of flagged words (synced lyrics + Whisper)")
     align.add_argument("files", nargs="+", type=Path)
     align.add_argument("--model", help="Whisper model size (default: small)")
-    align.add_argument("--no-separate", action="store_true", help="Skip Demucs; transcribe the full mix only")
+    align.add_argument("--lyrics", choices=LYRICS_MODES, default="auto", help=LYRICS_HELP)
     align.add_argument("--json", action="store_true", help="Output JSON")
     align.set_defaults(func=cmd_align)
 
     clean = sub.add_parser("clean", help="Censor files in place (originals kept in .dirtystem sidecars)")
     clean.add_argument("files", nargs="+", type=Path)
     clean.add_argument("--model", help="Whisper model size (default: small)")
+    clean.add_argument("--lyrics", choices=LYRICS_MODES, default="auto", help=LYRICS_HELP)
     clean.add_argument("--json", action="store_true", help="Output JSON")
     clean.set_defaults(func=cmd_clean)
 
