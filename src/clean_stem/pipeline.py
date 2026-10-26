@@ -64,10 +64,24 @@ class Located:
 LYRICS_MODES = ("auto", "plain", "none")
 
 
+class _AudioSetup:
+    """Decoded audio and listeners for one file; built only once it's needed."""
+
+    def __init__(self, path: Path, models: Models):
+        from clean_stem.audio import decode_mono, decode_stereo
+
+        self.mix_audio = decode_mono(path)
+        self.mix = align.mix_listener(self.mix_audio, models.transcriber)
+        self.separator = models.separator
+        self.stems: list = []
+        self.separator.stems = self.stems  # collect this file's windows only
+        self.stereo = decode_stereo(path, self.separator.sample_rate)
+        self.vocals = align.vocals_listener(self.stereo, self.separator.sample_rate, self.separator, models.transcriber)
+
+
 def locate(path: Path, models: Models, lyrics_mode: str = "auto") -> Located | str:
     """Find flagged words and their timings. Returns a skip reason on failure."""
     from clean_stem import scan
-    from clean_stem.audio import decode_mono, decode_stereo
 
     track = read_track_info(path)
     if track is None:
@@ -79,16 +93,14 @@ def locate(path: Path, models: Models, lyrics_mode: str = "auto") -> Located | s
         # Other sources sometimes include ad-libs the synced lyrics drop.
         others = [lyr.text for lyr in (read_embedded_lyrics(path), lookup_lyrics(track, (models.ovh,))) if lyr]
         synced = align.enrich_synced(synced, others)
-
-    mix_audio = decode_mono(path)
-    mix = align.mix_listener(mix_audio, models.transcriber)
-    separator = models.separator
-    stems: list = []
-    separator.stems = stems  # collect this file's windows only
-    stereo = decode_stereo(path, separator.sample_rate)
-    vocals = align.vocals_listener(stereo, separator.sample_rate, separator, models.transcriber)
+        if not any(find_profanity(line.text) for line in synced):
+            # Clean lyrics: bail before any audio work. (Unlisted ad-libs in
+            # otherwise clean songs aren't worth a full transcription each.)
+            return Located(track, fetched.source, [], synced)
 
     if synced:
+        audio = _AudioSetup(path, models)
+        mix, vocals, separator, stems, stereo = audio.mix, audio.vocals, audio.separator, audio.stems, audio.stereo
         separator.prefetch(stereo, separator.sample_rate, align.flagged_windows(synced, track.duration))
         words = align.align_flagged_words(synced, track.duration, [("vocals", vocals), ("mix", mix)])
         # Catch profanity the lyrics leave out: scan the full mix, then confirm
@@ -111,10 +123,12 @@ def locate(path: Path, models: Models, lyrics_mode: str = "auto") -> Located | s
             lyrics_text, lyrics_source = plain.text, plain.source
     if lyrics_text is not None and not find_profanity(lyrics_text):
         return Located(track, lyrics_source, [])
+    audio = _AudioSetup(path, models)
+    vocals, separator, stems = audio.vocals, audio.separator, audio.stems
     if lyrics_text is None:
         # Cheap check before separating the whole song: a confident full-mix
         # transcript with no profanity means the song is clean.
-        heard, confidence = models.transcriber.transcribe(mix_audio)
+        heard, confidence = models.transcriber.transcribe(audio.mix_audio)
         if confidence >= scan.CONFIDENT_PROBABILITY and not any(is_profane(w.text) for w in heard):
             return Located(track, "transcript", [])
 
