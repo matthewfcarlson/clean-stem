@@ -19,7 +19,7 @@ uv run pytest                               # CLEAN_STEM_ONLINE=1 to include onl
 
 Lyrics come from embedded tags first, then [LRCLIB](https://lrclib.net) (matched on artist, title, album and duration; often includes line timestamps), then [lyrics.ovh](https://lyrics.ovh).
 
-`align` uses LRCLIB's line timestamps to transcribe only a few seconds around each flagged line with faster-whisper, then lines the transcript up against the known lyrics. Each word is reported as `heard` (Whisper heard it), `inferred` (placed between the neighbouring words it did hear) or `estimated` (Whisper couldn't make out the line; position guessed from the line timing).
+`align` uses LRCLIB's line timestamps to pick a few seconds around each flagged line, isolates the vocals in that window with Demucs, transcribes them with faster-whisper, and lines the transcript up against the known lyrics. If a word isn't clearly heard on the vocals, the full mix is tried too (`--no-separate` skips Demucs entirely). Each word is reported as `heard` (Whisper heard it), `inferred` (placed between the neighbouring words it did hear) or `estimated` (Whisper couldn't make out the line; position guessed from the line timing).
 
 `samples/manifest.tsv` lists the test tracks and what result each should give. The audio is copyrighted and is not committed to the repo. To copy it from your own library:
 

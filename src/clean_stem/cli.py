@@ -101,10 +101,10 @@ def cmd_lyrics(args: argparse.Namespace) -> int:
 
 def cmd_align(args: argparse.Namespace) -> int:
     """Find when each flagged word is sung, using synced lyrics + Whisper."""
-    from clean_stem.align import DEFAULT_MODEL, Transcriber, align_flagged_words
-    from clean_stem.audio import decode_mono
+    from clean_stem.align import DEFAULT_MODEL, Transcriber, align_flagged_words, mix_listener, vocals_listener
+    from clean_stem.audio import decode_mono, decode_stereo
 
-    transcriber = None
+    transcriber = separator = None
     results = []
     for path in args.files:
         track = read_track_info(path)
@@ -114,7 +114,15 @@ def cmd_align(args: argparse.Namespace) -> int:
             continue
         if transcriber is None:
             transcriber = Transcriber(args.model or DEFAULT_MODEL)
-        words = align_flagged_words(decode_mono(path), fetched.synced, transcriber, track.duration)
+        listeners = [("mix", mix_listener(decode_mono(path), transcriber))]
+        if not args.no_separate:
+            if separator is None:
+                from clean_stem.separate import Separator
+
+                separator = Separator()
+            stereo = decode_stereo(path, separator.sample_rate)
+            listeners.insert(0, ("vocals", vocals_listener(stereo, separator.sample_rate, separator, transcriber)))
+        words = align_flagged_words(fetched.synced, track.duration, listeners)
         results.append(
             {
                 "file": str(path),
@@ -131,7 +139,8 @@ def cmd_align(args: argparse.Namespace) -> int:
     for result in results:
         print(f"{result['file']}  [{result.get('lyrics_source', result['status'])}]")
         for w in result.get("words", []):
-            print(f"  {w['start']:7.2f}-{w['end']:7.2f}  {w['method']:9}  {w['word']:<14} {w['line_text']}")
+            how = f"{w['method']}/{w['source']}" if w["source"] else w["method"]
+            print(f"  {w['start']:7.2f}-{w['end']:7.2f}  {how:16}  {w['word']:<14} {w['line_text']}")
     return 0
 
 
@@ -152,6 +161,7 @@ def main(argv: list[str] | None = None) -> int:
     align = sub.add_parser("align", help="Find timestamps of flagged words (synced lyrics + Whisper)")
     align.add_argument("files", nargs="+", type=Path)
     align.add_argument("--model", help="Whisper model size (default: small)")
+    align.add_argument("--no-separate", action="store_true", help="Skip Demucs; transcribe the full mix only")
     align.add_argument("--json", action="store_true", help="Output JSON")
     align.set_defaults(func=cmd_align)
 

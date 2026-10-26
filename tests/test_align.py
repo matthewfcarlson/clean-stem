@@ -1,5 +1,3 @@
-import numpy as np
-
 from clean_stem.align import TimedWord, align_flagged_words, estimate_timing, match_words, pad_span, tokenize
 from clean_stem.lookup import SyncedLine
 
@@ -13,14 +11,16 @@ def heard(spec: str, offset: float = 0.0) -> list[TimedWord]:
     return words
 
 
-class FakeTranscriber:
+class FakeListener:
     """Returns canned transcripts (times relative to the window) in call order."""
 
     def __init__(self, *transcripts: str):
         self.transcripts = list(transcripts)
+        self.calls = []
 
-    def words(self, audio):
-        return heard(self.transcripts.pop(0))
+    def __call__(self, start, end):
+        self.calls.append((start, end))
+        return heard(self.transcripts.pop(0), offset=start)
 
 
 def test_match_words_heard_exactly():
@@ -54,10 +54,11 @@ def test_align_flagged_words_uses_window_offsets_and_skips_clean_lines():
         SyncedLine(12.0, "Bloodsucker, fame fucker"),
         SyncedLine(14.0, "Bleeding me dry"),
     ]
-    # Only the profane line is transcribed; its window starts at 12.0 - 1.0 = 11.0.
-    transcriber = FakeTranscriber("wanted@0.2 Bloodsucker@1.0 fame@1.5 fucker@2.0 Bleeding@3.0")
-    words = align_flagged_words(np.zeros(16000 * 20, dtype=np.float32), lines, transcriber, 20.0)
-    assert [(w.word, w.line, w.method) for w in words] == [("fucker", 1, "heard")]
+    listener = FakeListener("wanted@0.2 Bloodsucker@1.0 fame@1.5 fucker@2.0 Bleeding@3.0")
+    words = align_flagged_words(lines, 20.0, [("vocals", listener)])
+    # Only the profane line is transcribed: from 1s before it to 1s after the next line starts.
+    assert listener.calls == [(11.0, 15.0)]
+    assert [(w.word, w.line, w.method, w.source) for w in words] == [("fucker", 1, "heard", "vocals")]
     # Heard at 13.0-13.2, then padded out to the minimum length.
     assert (round(words[0].start, 2), round(words[0].end, 2)) == (12.85, 13.45)
 
@@ -70,6 +71,22 @@ def test_pad_span_widens_and_clamps():
 
 def test_align_flagged_words_falls_back_to_estimate():
     lines = [SyncedLine(0.0, "You bald headed fag, blow me"), SyncedLine(4.0, "next")]
-    words = align_flagged_words(np.zeros(16000 * 5, dtype=np.float32), lines, FakeTranscriber(""), 5.0)
+    words = align_flagged_words(lines, 5.0, [("vocals", FakeListener(""))])
     assert len(words) == 1 and words[0].method == "estimated"
     assert 0.0 < words[0].start < words[0].end < 4.0
+
+
+def test_later_listeners_only_run_when_needed_and_best_result_wins():
+    lines = [SyncedLine(0.0, "fame fucker, goddamn vampire"), SyncedLine(4.0, "next")]
+    vocals = FakeListener("fame@0.5 fucker@1.0 goddam@1.5 vampire@2.0")  # "goddamn" misheard
+    mix = FakeListener("fame@0.5 fuh@1.0 goddamn@1.6 vampire@2.0")  # "fucker" misheard
+    words = align_flagged_words(lines, 5.0, [("vocals", vocals), ("mix", mix)])
+    assert [(w.word, w.method, w.source) for w in words] == [
+        ("fucker", "heard", "vocals"),
+        ("goddamn", "heard", "mix"),
+    ]
+
+    vocals = FakeListener("fame@0.5 fucker@1.0 goddamn@1.5 vampire@2.0")
+    mix = FakeListener()
+    align_flagged_words(lines, 5.0, [("vocals", vocals), ("mix", mix)])
+    assert mix.calls == []  # everything was heard on the vocals

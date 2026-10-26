@@ -2,7 +2,9 @@
 
 Synced lyrics tell us roughly when each line starts. For every line that
 contains profanity we transcribe a short window around it with word
-timestamps, then line the transcript up against the known lyrics. Words
+timestamps, then line the transcript up against the known lyrics. Each
+window is tried with a list of "listeners" in order (normally isolated
+vocals, then the full mix) until every flagged word in it is heard. Words
 Whisper hears correctly get exact timings ("heard"); words it mishears are
 placed between the neighbouring words it did hear ("inferred"). If Whisper
 can't make out the line at all, the word's position is estimated from where
@@ -14,11 +16,11 @@ from __future__ import annotations
 import re
 from dataclasses import dataclass
 from difflib import SequenceMatcher
-from typing import Iterable
+from typing import Callable, Iterable, Sequence
 
 import numpy as np
 
-from clean_stem.audio import WHISPER_SAMPLE_RATE
+from clean_stem.audio import WHISPER_SAMPLE_RATE, resample
 from clean_stem.lookup import SyncedLine
 from clean_stem.profanity import is_profane
 
@@ -51,6 +53,14 @@ class FlaggedWord:
     start: float
     end: float
     method: str  # "heard", "inferred" or "estimated"
+    source: str  # which listener located it, e.g. "vocals" or "mix"
+
+
+# Transcribes the song between two times (seconds); returned word times are
+# absolute, not relative to the window.
+Listener = Callable[[float, float], list[TimedWord]]
+
+_METHOD_RANK = {"heard": 0, "inferred": 1}
 
 
 def normalize(word: str) -> str:
@@ -83,6 +93,27 @@ class Transcriber:
                 for token in tokenize(w.word):
                     result.append(TimedWord(token, w.start, w.end))
         return result
+
+
+def mix_listener(audio: np.ndarray, transcriber: Transcriber) -> Listener:
+    """Listen to the full mix (mono, WHISPER_SAMPLE_RATE)."""
+
+    def listen(start: float, end: float) -> list[TimedWord]:
+        window = audio[int(start * WHISPER_SAMPLE_RATE) : int(end * WHISPER_SAMPLE_RATE)]
+        return [TimedWord(w.text, w.start + start, w.end + start) for w in transcriber.words(window)]
+
+    return listen
+
+
+def vocals_listener(stereo: np.ndarray, sample_rate: int, separator, transcriber: Transcriber) -> Listener:
+    """Listen to Demucs-isolated vocals. `separator` keeps the stems for splicing."""
+
+    def listen(start: float, end: float) -> list[TimedWord]:
+        stems = separator.separate(stereo, sample_rate, start, end)
+        vocals = resample(stems.vocals.mean(axis=0), sample_rate, WHISPER_SAMPLE_RATE)
+        return [TimedWord(w.text, w.start + start, w.end + start) for w in transcriber.words(vocals)]
+
+    return listen
 
 
 def match_words(lyric_tokens: list[str], heard: list[TimedWord], wanted: Iterable[int]) -> dict[int, tuple[float, float, str]]:
@@ -131,12 +162,15 @@ def estimate_timing(text: str, token_index: int, line_start: float, line_end: fl
 
 
 def align_flagged_words(
-    audio: np.ndarray,
     lines: list[SyncedLine],
-    transcriber: Transcriber,
     duration: float,
+    listeners: Sequence[tuple[str, Listener]],
 ) -> list[FlaggedWord]:
-    """Locate every profane word in the synced lyrics."""
+    """Locate every profane word in the synced lyrics.
+
+    `listeners` are (name, listener) pairs tried in order for each window;
+    later ones only run if an earlier one left some flagged word unheard.
+    """
     found: list[FlaggedWord] = []
 
     for idx, line in enumerate(lines):
@@ -148,22 +182,32 @@ def align_flagged_words(
         line_end = lines[idx + 1].time if idx + 1 < len(lines) else duration
         start = max(0.0, line.time - WINDOW_PAD)
         end = min(duration, line_end + WINDOW_PAD)
-        window = audio[int(start * WHISPER_SAMPLE_RATE) : int(end * WHISPER_SAMPLE_RATE)]
-        heard = [TimedWord(w.text, w.start + start, w.end + start) for w in transcriber.words(window)]
 
         # The window spills into the neighbouring lines, so align against them
         # too; otherwise their words get matched to this line's.
         prev_tokens = tokenize(lines[idx - 1].text) if idx > 0 else []
         next_tokens = tokenize(lines[idx + 1].text) if idx + 1 < len(lines) else []
         offset = len(prev_tokens)
-        timings = match_words(prev_tokens + tokens + next_tokens, heard, [offset + i for i in flagged])
+        lyric_tokens = prev_tokens + tokens + next_tokens
+
+        best: dict[int, tuple[float, float, str, str]] = {}
+        for name, listen in listeners:
+            timings = match_words(lyric_tokens, listen(start, end), [offset + i for i in flagged])
+            for i in flagged:
+                timing = timings.get(offset + i)
+                if timing is None:
+                    continue
+                if i not in best or _METHOD_RANK[timing[2]] < _METHOD_RANK[best[i][2]]:
+                    best[i] = (*timing, name)
+            if all(i in best and best[i][2] == "heard" for i in flagged):
+                break
 
         for i in flagged:
-            if (timing := timings.get(offset + i)) is not None:
-                word_start, word_end, method = timing
-                found.append(FlaggedWord(tokens[i], idx, *pad_span(word_start, word_end, duration), method))
+            if i in best:
+                word_start, word_end, method, name = best[i]
+                found.append(FlaggedWord(tokens[i], idx, *pad_span(word_start, word_end, duration), method, name))
             else:
                 est_start, est_end = estimate_timing(line.text, i, line.time, line_end)
-                found.append(FlaggedWord(tokens[i], idx, est_start, est_end, "estimated"))
+                found.append(FlaggedWord(tokens[i], idx, est_start, est_end, "estimated", ""))
 
     return found
