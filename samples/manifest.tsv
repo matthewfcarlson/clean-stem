@@ -1,0 +1,7 @@
+# id	source (relative to MUSIC_ROOT)	expect	notes
+vampire	Olivia Rodrigo - GUTS (2023) Mp3 320kbps [PMEDIA] ⭐️/03. vampire(Explicit).mp3	explicit	Embedded lyrics; sparse profanity (fucker, goddamn, fucked) - ideal v0.1 path
+all-american-bitch	Olivia Rodrigo - GUTS (2023) Mp3 320kbps [PMEDIA] ⭐️/01. all-american bitch(Explicit).mp3	explicit	Embedded lyrics; profanity in title, parenthetical ad-libs, implied word cut off at "American—"
+lacy	Olivia Rodrigo - GUTS (2023) Mp3 320kbps [PMEDIA] ⭐️/04. lacy.mp3	clean	Embedded lyrics; clean control (contains "Hell" - word-list edge case)
+squabble-up	Kendrick Lamar - GNX (2024) Mp3 320kbps [PMEDIA] ⭐️/02. squabble up.mp3	explicit	No embedded lyrics; dense, fast rap - Whisper-only stress test
+without-me	Eminem - Curtain Call The Hits (2005) [MP3 320] 88/09. Without Me.mp3	explicit	No embedded lyrics; dense profanity, older master
+dancing-queen	Abba - Greatest Songs (2018) Mp3 (320kbps) [Hunter]/Abba - Greatest Songs (2018)/17 - Dancing Queen.mp3	clean	No embedded lyrics; clean control for the transcribe-then-skip path

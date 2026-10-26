@@ -1,0 +1,9 @@
+# Sample audio is copyrighted; fetch locally with scripts/fetch_samples.sh
+samples/*
+!samples/manifest.tsv
+
+__pycache__/
+*.pyc
+.venv/
+.pytest_cache/
+.DS_Store
