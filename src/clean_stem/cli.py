@@ -8,7 +8,13 @@ import sys
 from collections import Counter
 from pathlib import Path
 
-from clean_stem.lookup import DEFAULT_PROVIDERS, lookup_lyrics, lyrics_similarity, read_track_info
+from clean_stem.lookup import (
+    DEFAULT_PROVIDERS,
+    LrclibProvider,
+    lookup_lyrics,
+    lyrics_similarity,
+    read_track_info,
+)
 from clean_stem.lyrics import read_embedded_lyrics
 from clean_stem.profanity import WORD_LIST_VERSION, find_profanity
 
@@ -93,6 +99,42 @@ def cmd_lyrics(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_align(args: argparse.Namespace) -> int:
+    """Find when each flagged word is sung, using synced lyrics + Whisper."""
+    from clean_stem.align import DEFAULT_MODEL, Transcriber, align_flagged_words
+    from clean_stem.audio import decode_mono
+
+    transcriber = None
+    results = []
+    for path in args.files:
+        track = read_track_info(path)
+        fetched = LrclibProvider().fetch(track) if track else None
+        if not fetched or not fetched.synced:
+            results.append({"file": str(path), "status": "no-synced-lyrics"})
+            continue
+        if transcriber is None:
+            transcriber = Transcriber(args.model or DEFAULT_MODEL)
+        words = align_flagged_words(decode_mono(path), fetched.synced, transcriber, track.duration)
+        results.append(
+            {
+                "file": str(path),
+                "status": "aligned",
+                "lyrics_source": fetched.source,
+                "words": [{**vars(w), "line_text": fetched.synced[w.line].text} for w in words],
+            }
+        )
+
+    if args.json:
+        json.dump(results, sys.stdout, indent=2)
+        print()
+        return 0
+    for result in results:
+        print(f"{result['file']}  [{result.get('lyrics_source', result['status'])}]")
+        for w in result.get("words", []):
+            print(f"  {w['start']:7.2f}-{w['end']:7.2f}  {w['method']:9}  {w['word']:<14} {w['line_text']}")
+    return 0
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(prog="clean-stem")
     sub = parser.add_subparsers(dest="command", required=True)
@@ -106,6 +148,12 @@ def main(argv: list[str] | None = None) -> int:
     lyrics = sub.add_parser("lyrics", help="Compare lyrics from tags and online sources")
     lyrics.add_argument("files", nargs="+", type=Path)
     lyrics.set_defaults(func=cmd_lyrics)
+
+    align = sub.add_parser("align", help="Find timestamps of flagged words (synced lyrics + Whisper)")
+    align.add_argument("files", nargs="+", type=Path)
+    align.add_argument("--model", help="Whisper model size (default: small)")
+    align.add_argument("--json", action="store_true", help="Output JSON")
+    align.set_defaults(func=cmd_align)
 
     args = parser.parse_args(argv)
     return args.func(args)
