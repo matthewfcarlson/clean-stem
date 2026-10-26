@@ -12,7 +12,7 @@ uv sync
 uv run clean-stem check path/to/song.mp3    # scan lyrics for profanity (tags, then online)
 uv run clean-stem lyrics path/to/song.mp3   # compare lyrics from each source
 uv run clean-stem align path/to/song.mp3    # timestamp each flagged word (Whisper)
-uv run clean-stem clean path/to/song.mp3    # censor in place, writes song.mp3.dirtystem
+uv run clean-stem clean path/to/Music       # censor in place (files or folders), writes song.mp3.dirtystem
 uv run clean-stem reverse path/to/song.mp3  # restore the original from the sidecar
 uv run pytest                               # CLEAN_STEM_ONLINE=1 to include online lookups
 ```
@@ -32,6 +32,8 @@ Lyrics gaps are covered three ways:
 Words heard where the isolated vocals are near-silent are discarded, since Whisper invents words over silence. `--lyrics plain|none` forces the fallbacks, for testing.
 
 `clean` replaces each flagged word with the Demucs instrumental for that moment (short crossfades either side), re-encodes in the original format and bitrate, copies all tags across, and swaps the file in place. Before swapping, it writes `song.mp3.dirtystem`: a zip with a `manifest.json` (what was replaced and why, plus hashes) and the original file's exact bytes, so `reverse` restores it bit-for-bit. Files that already have a sidecar are skipped.
+
+`clean` keeps a SQLite state file (`~/.cache/clean-stem/state.db`, or `--state` / `$CLEAN_STEM_STATE`) with every file's size, mtime and outcome, plus cached lyrics lookups. Re-running over a library only touches new or changed files; lookups that failed (site down, rate-limited) are retried next run, and files restored with `reverse` are left alone.
 
 `samples/manifest.tsv` lists the test tracks and what result each should give. The audio is copyrighted and is not committed to the repo. To copy it from your own library:
 
