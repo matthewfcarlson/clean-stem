@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import re
+import time
 import urllib.error
 import urllib.parse
 import urllib.request
@@ -17,6 +18,8 @@ USER_AGENT = "clean-stem/0.1 (https://github.com/matthewfcarlson/clean-stem)"
 TIMEOUT = 15
 # How far a candidate's duration may drift from the file's before we reject it.
 MAX_DURATION_DELTA = 4.0
+# Waits (seconds) before retrying a rate-limited or failing request.
+RETRY_DELAYS = (2, 8, 30)
 
 _TITLE_NOISE_RE = re.compile(r"\s*[\(\[](explicit|clean|remaster(ed)?[^)\]]*)[\)\]]\s*", re.I)
 _SECTION_HEADER_RE = re.compile(r"^\s*\[[^\]]*\]\s*$")
@@ -86,15 +89,31 @@ def lyrics_similarity(a: str, b: str) -> float:
     return SequenceMatcher(None, words(a), words(b), autojunk=False).ratio()
 
 
-def _get_json(url: str):
+class LookupFailed(Exception):
+    """A provider couldn't be reached. Unlike "not found", worth retrying later."""
+
+
+def _get_json(url: str, retry_delays=RETRY_DELAYS):
     req = urllib.request.Request(url, headers={"User-Agent": USER_AGENT})
-    try:
-        with urllib.request.urlopen(req, timeout=TIMEOUT) as resp:
-            return json.load(resp)
-    except urllib.error.HTTPError as e:
-        if e.code == 404:
-            return None
-        raise
+    for attempt in range(len(retry_delays) + 1):
+        try:
+            with urllib.request.urlopen(req, timeout=TIMEOUT) as resp:
+                return json.load(resp)
+        except urllib.error.HTTPError as e:
+            if e.code == 404:
+                return None
+            if e.code != 429 and e.code < 500:
+                raise LookupFailed(f"HTTP {e.code} from {url}") from e
+            error: Exception = e
+            retry_after = e.headers.get("Retry-After") if e.headers else None
+        except (urllib.error.URLError, TimeoutError, json.JSONDecodeError) as e:
+            error, retry_after = e, None
+        if attempt < len(retry_delays):
+            delay = retry_delays[attempt]
+            if retry_after and retry_after.isdigit():
+                delay = max(delay, min(int(retry_after), 300))
+            time.sleep(delay)
+    raise LookupFailed(f"{error} ({url})") from error
 
 
 class LrclibProvider:
@@ -162,12 +181,57 @@ DEFAULT_PROVIDERS = (LrclibProvider(), LyricsOvhProvider())
 
 
 def lookup_lyrics(track: TrackInfo, providers=DEFAULT_PROVIDERS) -> FetchedLyrics | None:
-    """Return lyrics from the first provider that has them."""
+    """Return lyrics from the first provider that has them.
+
+    Returns None only if every provider answered "not found"; if any of them
+    failed and none had lyrics, raises LookupFailed so the caller can retry.
+    """
+    failure: LookupFailed | None = None
     for provider in providers:
         try:
             result = provider.fetch(track)
-        except (urllib.error.URLError, TimeoutError, json.JSONDecodeError):
+        except LookupFailed as e:
+            failure = e
             continue
         if result is not None:
             return result
+    if failure is not None:
+        raise failure
     return None
+
+
+class CachedProvider:
+    """Wraps a provider with a persistent cache (see state.StateDB)."""
+
+    def __init__(self, provider, cache):
+        self.provider = provider
+        self.cache = cache
+        self.name = provider.name
+
+    def fetch(self, track: TrackInfo) -> FetchedLyrics | None:
+        hit, value = self.cache.get_lyrics(self.name, track)
+        if hit:
+            return value
+        value = self.provider.fetch(track)  # LookupFailed propagates uncached
+        self.cache.put_lyrics(self.name, track, value)
+        return value
+
+
+def lyrics_to_json(lyrics: FetchedLyrics | None) -> str | None:
+    if lyrics is None:
+        return None
+    return json.dumps(
+        {
+            "text": lyrics.text,
+            "source": lyrics.source,
+            "synced": [[line.time, line.text] for line in lyrics.synced],
+            "duration": lyrics.duration,
+        }
+    )
+
+
+def lyrics_from_json(data: str | None) -> FetchedLyrics | None:
+    if data is None:
+        return None
+    d = json.loads(data)
+    return FetchedLyrics(d["text"], d["source"], [SyncedLine(t, text) for t, text in d["synced"]], d["duration"])

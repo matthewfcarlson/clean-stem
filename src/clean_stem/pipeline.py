@@ -9,18 +9,34 @@ from functools import cached_property
 from pathlib import Path
 
 from clean_stem import align, sidecar
-from clean_stem.lookup import LrclibProvider, LyricsOvhProvider, TrackInfo, lookup_lyrics, read_track_info
+from clean_stem.lookup import (
+    CachedProvider,
+    LookupFailed,
+    LrclibProvider,
+    LyricsOvhProvider,
+    TrackInfo,
+    lookup_lyrics,
+    read_track_info,
+)
 from clean_stem.lyrics import read_embedded_lyrics
 from clean_stem.profanity import WORD_LIST_VERSION, find_profanity, is_profane
+from clean_stem.state import StateDB
 
 SUPPORTED_SUFFIXES = (".mp3", ".flac")
 
 
 @dataclass
 class Models:
-    """Loads Whisper and Demucs on first use, then reuses them across files."""
+    """Shared across files: Whisper and Demucs (loaded on first use) and the
+    lyrics providers (cached in `state` when given)."""
 
     whisper_model: str = align.DEFAULT_MODEL
+    state: StateDB | None = None
+
+    def __post_init__(self):
+        wrap = (lambda p: CachedProvider(p, self.state)) if self.state else (lambda p: p)
+        self.lrclib = wrap(LrclibProvider())
+        self.ovh = wrap(LyricsOvhProvider())
 
     @cached_property
     def transcriber(self) -> align.Transcriber:
@@ -57,11 +73,11 @@ def locate(path: Path, models: Models, lyrics_mode: str = "auto") -> Located | s
     if track is None:
         return "missing artist/title tags"
 
-    fetched = LrclibProvider().fetch(track) if lyrics_mode == "auto" else None
+    fetched = models.lrclib.fetch(track) if lyrics_mode == "auto" else None
     synced = fetched.synced if fetched else []
     if synced:
         # Other sources sometimes include ad-libs the synced lyrics drop.
-        others = [lyr.text for lyr in (read_embedded_lyrics(path), lookup_lyrics(track, (LyricsOvhProvider(),))) if lyr]
+        others = [lyr.text for lyr in (read_embedded_lyrics(path), lookup_lyrics(track, (models.ovh,))) if lyr]
         synced = align.enrich_synced(synced, others)
 
     mix_audio = decode_mono(path)
@@ -90,7 +106,7 @@ def locate(path: Path, models: Models, lyrics_mode: str = "auto") -> Located | s
     if lyrics_mode != "none":
         if (embedded := read_embedded_lyrics(path)) is not None:
             lyrics_text, lyrics_source = embedded.text, embedded.source
-        elif (plain := lookup_lyrics(track)) is not None:
+        elif (plain := lookup_lyrics(track, (models.lrclib, models.ovh))) is not None:
             lyrics_text, lyrics_source = plain.text, plain.source
     if lyrics_text is not None and not find_profanity(lyrics_text):
         return Located(track, lyrics_source, [])
@@ -123,7 +139,10 @@ def clean(path: Path, models: Models, lyrics_mode: str = "auto") -> dict:
     if embedded is not None and not find_profanity(embedded.text):
         return {**result, "status": "clean", "lyrics_source": embedded.source}
 
-    located = locate(path, models, lyrics_mode)
+    try:
+        located = locate(path, models, lyrics_mode)
+    except LookupFailed as e:
+        return {**result, "status": "error", "reason": f"lyrics lookup failed, will retry: {e}"}
     if isinstance(located, str):
         return {**result, "status": "skipped", "reason": located}
     if not located.words:

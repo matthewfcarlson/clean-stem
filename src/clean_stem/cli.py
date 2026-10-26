@@ -136,30 +136,56 @@ def cmd_align(args: argparse.Namespace) -> int:
     return 0
 
 
+def open_state(args: argparse.Namespace):
+    from clean_stem.state import StateDB
+
+    return None if args.no_state else StateDB(args.state)
+
+
 def cmd_clean(args: argparse.Namespace) -> int:
     """Censor files in place, keeping the originals in .dirtystem sidecars."""
+    import time
+
+    from clean_stem.batch import is_unchanged, iter_audio_files
     from clean_stem.pipeline import Models, clean
 
-    models = Models(whisper_model=args.model or Models.whisper_model)
+    state = open_state(args)
+    models = Models(whisper_model=args.model or Models.whisper_model, state=state)
+    files = list(iter_audio_files(args.files))
     results = []
-    for path in args.files:
-        result = clean(path, models, args.lyrics)
+    counts: Counter = Counter()
+    for n, path in enumerate(files, start=1):
+        if state and not args.force and is_unchanged(state, path):
+            counts["unchanged"] += 1
+            continue
+        started = time.monotonic()
+        try:
+            result = clean(path, models, args.lyrics)
+        except Exception as e:  # keep going through a big library
+            result = {"file": str(path), "status": "error", "reason": f"{type(e).__name__}: {e}"}
+        if state:
+            state.put_file(path, result["status"], result.get("reason"), WORD_LIST_VERSION)
+        counts[result["status"]] += 1
         results.append(result)
         if not args.json:
             detail = result.get("reason") or result.get("lyrics_source", "")
             if result["status"] == "cleaned":
                 detail = f"{len(result['replacements'])} words replaced  [{detail}]"
-            print(f"{result['status'].upper():9} {path}  {detail}")
+            elapsed = time.monotonic() - started
+            print(f"[{n}/{len(files)}] {result['status'].upper():8} {path}  {detail}  ({elapsed:.0f}s)", flush=True)
     if args.json:
         json.dump(results, sys.stdout, indent=2)
         print()
-    return 0
+    else:
+        print("summary: " + ", ".join(f"{k} {v}" for k, v in sorted(counts.items())) if counts else "nothing to do")
+    return 1 if counts["error"] else 0
 
 
 def cmd_reverse(args: argparse.Namespace) -> int:
     """Restore originals from their .dirtystem sidecars."""
     from clean_stem.sidecar import ReverseError, reverse, sidecar_path
 
+    state = open_state(args)
     failed = 0
     for path in args.files:
         if not sidecar_path(path).exists():
@@ -167,6 +193,9 @@ def cmd_reverse(args: argparse.Namespace) -> int:
             continue
         try:
             print(f"{reverse(path, force=args.force):9} {path}")
+            if state:
+                # Remember the choice, so later runs leave the original alone.
+                state.put_file(path, "reversed", "restored by user", WORD_LIST_VERSION)
         except ReverseError as e:
             failed += 1
             print(f"FAILED    {path}: {e}")
@@ -198,7 +227,8 @@ def main(argv: list[str] | None = None) -> int:
     align.set_defaults(func=cmd_align)
 
     clean = sub.add_parser("clean", help="Censor files in place (originals kept in .dirtystem sidecars)")
-    clean.add_argument("files", nargs="+", type=Path)
+    clean.add_argument("files", nargs="+", type=Path, help="Files or directories (searched recursively)")
+    clean.add_argument("--force", action="store_true", help="Reprocess files even if unchanged since the last run")
     clean.add_argument("--model", help="Whisper model size (default: small)")
     clean.add_argument("--lyrics", choices=LYRICS_MODES, default="auto", help=LYRICS_HELP)
     clean.add_argument("--json", action="store_true", help="Output JSON")
@@ -207,6 +237,9 @@ def main(argv: list[str] | None = None) -> int:
     rev = sub.add_parser("reverse", help="Restore originals from .dirtystem sidecars")
     rev.add_argument("files", nargs="+", type=Path)
     rev.add_argument("--force", action="store_true", help="Restore even if the file changed since cleaning")
+    for p in (clean, rev):
+        p.add_argument("--state", type=Path, default=None, help="State database (default: $CLEAN_STEM_STATE or ~/.cache/clean-stem/state.db)")
+        p.add_argument("--no-state", action="store_true", help="Don't read or record state, or cache lyrics")
     rev.set_defaults(func=cmd_reverse)
 
     args = parser.parse_args(argv)
