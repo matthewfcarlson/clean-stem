@@ -22,7 +22,7 @@ from clean_stem.lyrics import read_embedded_lyrics
 from clean_stem.profanity import WORD_LIST_VERSION, find_profanity, is_profane
 from clean_stem.state import StateDB
 
-SUPPORTED_SUFFIXES = (".mp3", ".flac")
+SUPPORTED_SUFFIXES = (".mp3", ".flac", ".ogg", ".opus")
 
 
 @dataclass
@@ -140,7 +140,7 @@ def locate(path: Path, models: Models, lyrics_mode: str = "auto") -> Located | s
 def clean(path: Path, models: Models, lyrics_mode: str = "auto") -> dict:
     """Censor one file in place, writing a .dirtystem sidecar. Returns a result dict."""
     from clean_stem.audio import decode_stereo
-    from clean_stem.splice import Span, encode_like, replace_spans
+    from clean_stem.splice import OPUS_SAMPLE_RATE, Span, encode_like, replace_spans
 
     result = {"file": str(path)}
     if path.suffix.lower() not in SUPPORTED_SUFFIXES:
@@ -167,7 +167,9 @@ def clean(path: Path, models: Models, lyrics_mode: str = "auto") -> dict:
     import mutagen
 
     info = mutagen.File(path).info
-    sample_rate, channels = info.sample_rate, info.channels
+    sample_rate, channels = getattr(info, "sample_rate", None), info.channels
+    if sample_rate is None:  # Opus: mutagen has no rate; it always decodes at 48 kHz
+        sample_rate = OPUS_SAMPLE_RATE
     audio = decode_stereo(path, sample_rate)
     if channels == 1:
         audio = audio[:1]
