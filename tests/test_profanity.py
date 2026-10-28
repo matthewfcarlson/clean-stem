@@ -5,7 +5,7 @@ from clean_stem.profanity import find_profanity, is_profane
 
 @pytest.mark.parametrize(
     "word",
-    ["fuck", "Fucking", "motherfucker", "bullshit", "bitches", "goddamn", "damn", "ass", "fuckin'", "fuckin’",
+    ["fuck", "Fucking", "motherfucker", "bullshit", "bitches", "goddamn", "damn", "asshole", "fuckin'", "fuckin’",
      "f**k", "F*cking", "sh*t", "b***h", "n****s"],
 )
 def test_flags_profanity(word):
@@ -14,7 +14,7 @@ def test_flags_profanity(word):
 
 @pytest.mark.parametrize(
     "word",
-    ["hell", "class", "assume", "Dickens", "cocktail", "pissed", "Scunthorpe", "hoedown", "shoe"],
+    ["hell", "class", "assume", "Dickens", "cocktail", "pissed", "Scunthorpe", "hoedown", "shoe", "ass", "dick", "hoes"],
 )
 def test_ignores_innocent_words(word):
     assert not is_profane(word)

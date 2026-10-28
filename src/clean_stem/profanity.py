@@ -19,26 +19,25 @@ ROOTS = (
 )
 
 # Words flagged only as whole words, optionally with a common suffix, because
-# their letters show up inside innocent words ("class", "Dickens", "cocktail", "Scunthorpe").
+# their letters show up inside innocent words ("class", "cocktail", "Scunthorpe").
 WHOLE_WORDS = (
-    "ass",
     "asshole",
     "damn",
     "goddamn",
-    "dick",
     "cock",
     "pussy",
     "bastard",
     "cunt",
     "whore",
     "slut",
-    "hoe",
     "fag",
     "faggot",
 )
 WHOLE_WORD_SUFFIXES = ("", "s", "es", "ed", "in", "ing", "in'")
 
-WORD_LIST_VERSION = "1"
+# Bump when the list changes, so batch runs re-check files.
+# 2: dropped "ass", "dick", "hoe" as too tame / too often misheard ("whole" -> "hoe").
+WORD_LIST_VERSION = "2"
 
 # Asterisks are part of words so censored lyrics ("f**k", "sh*t") stay whole.
 _WORD_RE = re.compile(r"[A-Za-z][A-Za-z'’*]*")
