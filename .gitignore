@@ -7,3 +7,6 @@ __pycache__/
 .venv/
 .pytest_cache/
 .DS_Store
+
+# Agent worktrees
+.claude/worktrees/
