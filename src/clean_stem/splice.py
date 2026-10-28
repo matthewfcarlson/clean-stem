@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import functools
 import subprocess
 from dataclasses import dataclass
 from pathlib import Path
@@ -98,6 +99,10 @@ def encode_like(original: Path, audio: np.ndarray, sample_rate: int, dest: Path)
         # Match the original bit depth; unmodified samples then round-trip exactly.
         depth = ["-sample_fmt", "s16"] if info.bits_per_sample <= 16 else ["-sample_fmt", "s32", "-bits_per_raw_sample", "24"]
         codec = ["-c:a", "flac", *depth, "-compression_level", "8", "-f", "flac"]
+    elif suffix in (".ogg", ".opus"):
+        codec = _ogg_codec(original)
+        if codec[1] == "vorbis":
+            audio = _dither_for_native_vorbis(audio)
     else:
         raise ValueError(f"unsupported format: {suffix}")
 
@@ -121,6 +126,9 @@ def copy_tags(original: Path, dest: Path) -> None:
     if original.suffix.lower() == ".mp3":
         ID3(original).save(dest)
         return
+    elif original.suffix.lower() in (".ogg", ".opus"):
+        _copy_vorbis_comments(original, dest)
+        return
     src, dst = mutagen.File(original), mutagen.File(dest)
     dst.delete()
     for key, value in (src.tags or {}).items():
@@ -128,4 +136,82 @@ def copy_tags(original: Path, dest: Path) -> None:
     if isinstance(src, FLAC):
         for picture in src.pictures:
             dst.add_picture(picture)
+    dst.save()
+
+
+# Ogg Vorbis / Opus.
+#
+# Timing: ffmpeg writes the Opus pre-skip and the Vorbis end-trim granule
+# position, so decoding the re-encoded file lines up with the original sample
+# for sample (tests/test_ogg.py checks this). Opus always decodes at 48 kHz and
+# mutagen reports no sample rate for it; the pipeline splices at 48 kHz.
+OPUS_SAMPLE_RATE = 48000
+
+# ffmpeg's built-in Vorbis encoder (used only when ffmpeg lacks libvorbis, as
+# Homebrew's does) ignores bitrate targets; it only takes a quality. Typical
+# bitrates (kbps) per quality on pop music, used to pick the closest one.
+NATIVE_VORBIS_QUALITY_KBPS = ((2, 75), (4, 123), (6, 161), (8, 190), (10, 214))
+
+
+def _ogg_codec(original: Path) -> list[str]:
+    """ffmpeg codec arguments re-encoding an Ogg file with its own codec and bitrate."""
+    import mutagen
+    from mutagen.oggopus import OggOpus
+    from mutagen.oggvorbis import OggVorbis
+
+    audio = mutagen.File(original)
+    if isinstance(audio, OggOpus):
+        # mutagen's Opus bitrate is the measured average, excluding tags and art.
+        kbps = max(6, round((audio.info.bitrate or _ogg_audio_bitrate(original, audio.info.length)) / 1000))
+        return ["-c:a", "libopus", "-b:a", f"{kbps}k", "-ar", str(OPUS_SAMPLE_RATE), "-f", "ogg"]
+    if isinstance(audio, OggVorbis):
+        # Vorbis headers carry a nominal bitrate; some encoders leave it 0.
+        bitrate = audio.info.bitrate or _ogg_audio_bitrate(original, audio.info.length)
+        if _ffmpeg_has_encoder("libvorbis"):
+            return ["-c:a", "libvorbis", "-b:a", f"{round(bitrate / 1000)}k", "-f", "ogg"]
+        if audio.info.channels != 2:
+            raise ValueError("ffmpeg lacks libvorbis; its built-in Vorbis encoder only supports stereo")
+        quality = min(NATIVE_VORBIS_QUALITY_KBPS, key=lambda qk: abs(qk[1] - bitrate / 1000))[0]
+        return ["-c:a", "vorbis", "-strict", "experimental", "-q:a", str(quality), "-f", "ogg"]
+    raise ValueError(f"unsupported Ogg codec in {original.name}: {type(audio).__name__}")
+
+
+def _dither_for_native_vorbis(audio: np.ndarray) -> np.ndarray:
+    """Add -100 dBFS noise. ffmpeg's built-in Vorbis encoder hits an assertion
+    (floor_encode: l != csub) on some already-lossy input, e.g. decoded Vorbis;
+    this inaudible noise avoids it."""
+    noise = np.random.default_rng(0).standard_normal(audio.shape).astype(np.float32)
+    return audio + noise * np.float32(1e-5)
+
+
+def _ogg_audio_bitrate(path: Path, length: float) -> int:
+    """Average bitrate of the audio pages (header pages, with tags and art, excluded)."""
+    from mutagen.ogg import OggPage
+
+    size = 0
+    with path.open("rb") as f:
+        while True:
+            try:
+                page = OggPage(f)
+            except EOFError:
+                break
+            if page.position > 0:  # header pages are 0, or -1 mid-way through big cover art
+                size += page.size
+    return round(size * 8 / length) if length else 0
+
+
+@functools.cache
+def _ffmpeg_has_encoder(name: str) -> bool:
+    out = subprocess.run(["ffmpeg", "-hide_banner", "-encoders"], capture_output=True, text=True).stdout
+    return any(line.split()[1:2] == [name] for line in out.splitlines())
+
+
+def _copy_vorbis_comments(original: Path, dest: Path) -> None:
+    """Copy the Vorbis comments verbatim: key case, order and repeated keys,
+    including cover art (METADATA_BLOCK_PICTURE) and lyrics."""
+    import mutagen
+
+    src, dst = mutagen.File(original), mutagen.File(dest)
+    dst.tags.clear()  # drops ffmpeg's ENCODER tag; the vendor string stays
+    dst.tags.extend(src.tags or [])
     dst.save()

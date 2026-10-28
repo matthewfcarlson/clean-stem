@@ -7,6 +7,8 @@ See [VISION.md](VISION.md) for goals and architecture.
 
 Requires [uv](https://docs.astral.sh/uv/) and ffmpeg.
 
+Ogg Vorbis files are re-encoded with libvorbis when ffmpeg has it. Homebrew's ffmpeg doesn't; there, ffmpeg's built-in Vorbis encoder is used instead. It produces lower quality and handles stereo files only.
+
 ```sh
 uv sync
 uv run clean-stem check path/to/song.mp3    # scan lyrics for profanity (tags, then online)
