@@ -28,6 +28,9 @@ DEFAULT_MODEL = "small"
 # Seconds of audio to include before a line starts and after the next begins;
 # LRC timestamps are often slightly early or late.
 WINDOW_PAD = 1.0
+# Other lyric sources must match the synced lyrics at least this well
+# (0-1, word-level) before their extra profanity is trusted.
+MIN_ENRICH_SIMILARITY = 0.75
 # Extra margin either side of a word whose position is only estimated.
 ESTIMATE_PAD = 0.5
 # Whisper word timestamps are tight and clip consonants at either end, so
@@ -244,9 +247,18 @@ def enrich_synced(lines: list[SyncedLine], other_texts: Iterable[str]) -> list[S
     plain lyrics or the file's embedded lyrics include. Each other text is
     aligned against the synced lyrics word by word; profane words it has
     extra are inserted into the synced line next to where they appear.
+
+    Texts that don't closely match the synced lyrics overall (a different
+    version, or the song pasted several times over) are ignored, since
+    every difference would be read as an ad-lib.
     """
+    from clean_stem.lookup import lyrics_similarity
+
     lines = list(lines)
+    synced_text = "\n".join(line.text for line in lines)
     for other in other_texts:
+        if lyrics_similarity(synced_text, other) < MIN_ENRICH_SIMILARITY:
+            continue
         line_tokens = [tokenize(line.text) for line in lines]
         flat = [(li, ti) for li, tokens in enumerate(line_tokens) for ti in range(len(tokens))]
         if not flat:

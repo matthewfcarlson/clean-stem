@@ -121,3 +121,11 @@ def test_match_words_infers_within_long_misheard_stretch_proportionally():
     # Fewer heard words than lyric words: spans round outwards.
     start, end, _ = match_words(tokens, heard("x0@0 x1@1 x2@2 x3@3"), [3])[3]
     assert (start, end) == (1.0, 1.2)
+
+
+def test_enrich_synced_ignores_sources_that_dont_match():
+    from clean_stem.align import enrich_synced
+
+    lines = [SyncedLine(1.0, "Let's play the blame game"), SyncedLine(3.0, "I love you more")]
+    repeated = "Let's play the blame game, I love you more\n" + "Who taught you, motherfucker? Yeezy taught me\n" * 3
+    assert enrich_synced(lines, [repeated]) == lines
