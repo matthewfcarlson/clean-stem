@@ -103,6 +103,16 @@ def encode_like(original: Path, audio: np.ndarray, sample_rate: int, dest: Path)
         codec = _ogg_codec(original)
         if codec[1] == "vorbis":
             audio = _dither_for_native_vorbis(audio)
+    elif suffix == ".m4a" and info.codec == "alac":
+        # Lossless; ffmpeg's ALAC encoder stores 16 bits from s16p and 24 from s32p.
+        codec = ["-c:a", "alac", "-sample_fmt", "s32p" if info.bits_per_sample > 16 else "s16p", "-f", "ipod"]
+    elif suffix == ".m4a" and info.codec.startswith("mp4a"):
+        bps = info.bitrate or int(original.stat().st_size * 8 / info.length)
+        codec = [*_aac_encoder(info.codec), "-b:a", f"{round(bps / 1000)}k", "-f", "ipod"]
+        # ffmpeg decodes the original's end padding as audio; drop it so the length holds.
+        priming, _, valid = _gapless(original)
+        if priming and sample_rate == info.sample_rate:
+            audio = audio[:, :valid]
     else:
         raise ValueError(f"unsupported format: {suffix}")
 
@@ -122,6 +132,7 @@ def copy_tags(original: Path, dest: Path) -> None:
     import mutagen
     from mutagen.flac import FLAC
     from mutagen.id3 import ID3
+    from mutagen.mp4 import MP4, MP4FreeForm
 
     if original.suffix.lower() == ".mp3":
         ID3(original).save(dest)
@@ -136,6 +147,11 @@ def copy_tags(original: Path, dest: Path) -> None:
     if isinstance(src, FLAC):
         for picture in src.pictures:
             dst.add_picture(picture)
+    elif isinstance(src, MP4) and ITUNSMPB in dst:
+        # iTunSMPB records the encoder's priming/padding and ffmpeg trusts it
+        # over the edit list, so the original's would shift the new encode.
+        smpb = " 00000000 {:08X} {:08X} {:016X}".format(*_gapless(dest)) + " 00000000" * 8
+        dst[ITUNSMPB] = [MP4FreeForm(smpb.encode(), dataformat=dst[ITUNSMPB][0].dataformat)]
     dst.save()
 
 
@@ -215,3 +231,55 @@ def _copy_vorbis_comments(original: Path, dest: Path) -> None:
     dst.tags.clear()  # drops ffmpeg's ENCODER tag; the vendor string stays
     dst.tags.extend(src.tags or [])
     dst.save()
+ITUNSMPB = "----:com.apple.iTunes:iTunSMPB"
+
+
+def _aac_encoder(codec: str) -> list[str]:
+    """ffmpeg args for the best available AAC encoder (fdk keeps an HE-AAC profile)."""
+    if _ffmpeg_has_encoder("libfdk_aac"):
+        profile = {"mp4a.40.5": "aac_he", "mp4a.40.29": "aac_he_v2"}.get(codec, "aac_low")
+        return ["-c:a", "libfdk_aac", "-profile:a", profile]
+    return ["-c:a", "aac"]
+
+
+def _gapless(path: Path) -> tuple[int, int, int]:
+    """(priming, padding, valid) samples of an MP4 audio track, from its edit list.
+
+    AAC encoders prepend priming samples and pad the last frame; the edit list
+    says which samples are real. Apple players go by it; ffmpeg prefers
+    iTunSMPB for the priming and never trims the end padding.
+    """
+    import struct
+
+    from mutagen.mp4 import Atoms
+
+    with path.open("rb") as f:
+        atoms = Atoms(f)
+
+        def payload(*names: bytes) -> bytes | None:
+            try:
+                return atoms.path(b"moov", *names)[-1].read(f)[1]
+            except KeyError:
+                return None
+
+        def timescale(box: bytes) -> int:  # mvhd / mdhd: version 1 has 64-bit times
+            return struct.unpack_from(">I", box, 20 if box[0] == 1 else 12)[0]
+
+        movie_scale = timescale(payload(b"mvhd"))
+        media_scale = timescale(payload(b"trak", b"mdia", b"mdhd"))
+        stts = payload(b"trak", b"mdia", b"minf", b"stbl", b"stts")
+        entries = struct.unpack_from(f">{2 * struct.unpack_from('>I', stts, 4)[0]}I", stts, 8)
+        counts, deltas = entries[::2], entries[1::2]
+        # ffmpeg shortens the last packet's duration, so pad to whole frames.
+        coded = sum(counts) * deltas[0]
+        priming, valid, padding = 0, sum(n * d for n, d in zip(counts, deltas)), 0
+        edts = payload(b"trak", b"edts")  # mutagen doesn't descend into edts
+        if edts and edts[4:8] == b"elst":
+            elst = edts[8 : struct.unpack_from(">I", edts)[0]]
+            fmt = ">Qq4x" if elst[0] == 1 else ">Ii4x"
+            for duration, media_time in struct.iter_unpack(fmt, elst[8:]):
+                if media_time >= 0:  # skip empty edits
+                    priming, valid = media_time, round(duration * media_scale / movie_scale)
+                    padding = max(coded - priming - valid, 0)
+                    break
+    return priming, padding, valid

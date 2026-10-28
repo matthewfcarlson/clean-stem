@@ -22,7 +22,7 @@ from clean_stem.lyrics import read_embedded_lyrics
 from clean_stem.profanity import WORD_LIST_VERSION, find_profanity, is_profane
 from clean_stem.state import StateDB
 
-SUPPORTED_SUFFIXES = (".mp3", ".flac", ".ogg", ".opus")
+SUPPORTED_SUFFIXES = (".mp3", ".flac", ".m4a", ".ogg", ".opus")
 
 
 @dataclass
