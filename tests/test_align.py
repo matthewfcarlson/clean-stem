@@ -129,3 +129,12 @@ def test_enrich_synced_ignores_sources_that_dont_match():
     lines = [SyncedLine(1.0, "Let's play the blame game"), SyncedLine(3.0, "I love you more")]
     repeated = "Let's play the blame game, I love you more\n" + "Who taught you, motherfucker? Yeezy taught me\n" * 3
     assert enrich_synced(lines, [repeated]) == lines
+
+
+def test_flagged_words_sharing_a_span_fall_back_to_estimate():
+    lines = [SyncedLine(10.0, "God damn, god damn"), SyncedLine(14.0, "Who taught you")]
+    # Both "damn"s get mapped onto the single "goddamn" Whisper heard.
+    listener = FakeListener("goddamn@1.5 who@4.0")
+    words = align_flagged_words(lines, 20.0, [("vocals", listener)])
+    assert [w.method for w in words] == ["inferred", "estimated"]
+    assert words[1].start > words[0].start

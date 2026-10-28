@@ -229,9 +229,13 @@ def align_flagged_words(
             if all(i in best and best[i][2] == "heard" for i in flagged):
                 break
 
+        claimed: set[tuple[float, float]] = set()
         for i in flagged:
-            if i in best:
+            # Two flagged words given the same span ("God damn, god damn" heard
+            # as one "goddamn") means one wasn't really found; estimate it.
+            if i in best and best[i][:2] not in claimed:
                 word_start, word_end, method, name = best[i]
+                claimed.add((word_start, word_end))
                 found.append(FlaggedWord(tokens[i], idx, *pad_span(word_start, word_end, duration), method, name))
             else:
                 est_start, est_end = estimate_timing(line.text, i, line.time, line_end)
