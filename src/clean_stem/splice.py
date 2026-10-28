@@ -95,7 +95,9 @@ def encode_like(original: Path, audio: np.ndarray, sample_rate: int, dest: Path)
         kbps = min(STANDARD_MP3_BITRATES, key=lambda b: abs(b - info.bitrate / 1000))
         codec = ["-c:a", "libmp3lame", "-b:a", f"{kbps}k", "-f", "mp3"]
     elif suffix == ".flac":
-        codec = ["-c:a", "flac", "-f", "flac"]
+        # Match the original bit depth; unmodified samples then round-trip exactly.
+        depth = ["-sample_fmt", "s16"] if info.bits_per_sample <= 16 else ["-sample_fmt", "s32", "-bits_per_raw_sample", "24"]
+        codec = ["-c:a", "flac", *depth, "-compression_level", "8", "-f", "flac"]
     else:
         raise ValueError(f"unsupported format: {suffix}")
 

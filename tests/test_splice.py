@@ -44,3 +44,32 @@ def test_merge_windows_and_stems_slice():
     part = stems.slice(4.0, 5.0, RATE)
     assert (part.start, part.end, part.vocals.shape) == (4.0, 5.0, (2, RATE))
     assert part.vocals[0, 0] == 2 * RATE and part.instrumental[0, 0] == -2 * RATE
+
+
+def test_flac_reencode_keeps_bit_depth_and_unmodified_samples(tmp_path):
+    import subprocess
+
+    import mutagen
+
+    from clean_stem.audio import decode_stereo
+    from clean_stem.splice import encode_like
+
+    src = tmp_path / "src.flac"
+    subprocess.run(
+        ["ffmpeg", "-v", "error", "-f", "lavfi", "-i", "anoisesrc=d=2:a=0.3", "-ac", "2", "-ar", "44100",
+         "-sample_fmt", "s16", str(src)],
+        check=True,
+    )
+    tags = mutagen.File(src)
+    tags["title"] = "noise"
+    tags.save()
+
+    out = tmp_path / "out.flac"
+    encode_like(src, decode_stereo(src, 44100), 44100, out)
+
+    def pcm(path):
+        return subprocess.run(["ffmpeg", "-v", "error", "-i", str(path), "-f", "s16le", "-"], capture_output=True, check=True).stdout
+
+    assert mutagen.File(out).info.bits_per_sample == 16
+    assert mutagen.File(out)["title"] == ["noise"]
+    assert pcm(out) == pcm(src)
