@@ -19,7 +19,7 @@ import soundfile as sf
 
 from make_source import SR, reshape, trim
 
-FADE = 0.03
+FADE = 0.03  # overridden by --fade
 
 
 def rms(x: np.ndarray) -> float:
@@ -35,6 +35,8 @@ def main() -> None:
     p.add_argument("case", type=Path)
     p.add_argument("outdir", type=Path)
     p.add_argument("--borrow", type=float, nargs=2)
+    p.add_argument("--fade", type=float, default=FADE)
+    p.add_argument("--tag", default="")
     a = p.parse_args()
 
     meta = json.loads((a.case / "meta.json").read_text())
@@ -52,7 +54,7 @@ def main() -> None:
         fill = inst[lo : lo + n].copy()
         if new_vocal is not None:
             fill += new_vocal
-        f = int(FADE * sr)
+        f = int(a.fade * sr)
         ramp = 0.5 - 0.5 * np.cos(np.linspace(0, np.pi, f))[:, None]
         out = mix.copy()
         seg = out[lo : lo + n]
@@ -75,14 +77,15 @@ def main() -> None:
     vc_files = sorted((a.case / "vc").glob("*.wav"))
     if vc_files:
         vc, _ = librosa.load(vc_files[0], sr=SR)
-        variants["4-seedvc"] = splice(stereo_like(trim(vc, 40)))
+        off = int(round(meta.get("source_offset", 0.0) * sr))
+        variants["4-seedvc"] = splice(stereo_like(vc[off : off + n]))
     if a.borrow:
         b = vocals[int(a.borrow[0] * sr) : int(a.borrow[1] * sr)].mean(axis=1)
         variants["5-borrowed"] = splice(stereo_like(reshape(trim(b, 30), word.mean(axis=1))))
 
     a.outdir.mkdir(parents=True, exist_ok=True)
     for name, x in variants.items():
-        wav = a.outdir / f"{a.case.name}-{name}.wav"
+        wav = a.outdir / f"{a.case.name}-{name}{a.tag}.wav"
         sf.write(wav, np.clip(x, -1, 1), sr)
         subprocess.run(["ffmpeg", "-loglevel", "error", "-y", "-i", str(wav), "-b:a", "192k", str(wav.with_suffix(".mp3"))], check=True)
         wav.unlink()

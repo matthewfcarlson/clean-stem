@@ -5,6 +5,7 @@ source for voice conversion (the voice itself comes from the reference).
     python make_source.py CASE_DIR WORD
 """
 
+import json
 import subprocess
 import sys
 from pathlib import Path
@@ -15,6 +16,8 @@ import pyworld as pw
 import soundfile as sf
 
 SR = 44100
+# Seconds of the original vocals kept either side of the new word.
+CONTEXT = 0.5
 
 
 def trim(x: np.ndarray, db: float = 35) -> np.ndarray:
@@ -59,7 +62,19 @@ def main() -> None:
     subprocess.run(["say", "-o", str(aiff), word], check=True)
     tts, _ = librosa.load(aiff, sr=SR)
     orig, _ = librosa.load(case / "word.wav", sr=SR)  # mono vocals of the swear
-    sf.write(case / "source.wav", reshape(trim(tts), orig), SR)
+    new = reshape(trim(tts), orig)
+    new *= np.sqrt(np.mean(orig**2) / (np.mean(new**2) + 1e-12))
+
+    # Surround the word with the singer's real vocals so the conversion has
+    # context and its edge artifacts land outside the word.
+    meta = json.loads((case / "meta.json").read_text())
+    vocals, _ = librosa.load(case / "window_vocals.wav", sr=SR)
+    lo = int(round((meta["start"] - meta["window_start"]) * SR))
+    pad = int(CONTEXT * SR)
+    y = np.concatenate([vocals[max(0, lo - pad) : lo], new, vocals[lo + len(orig) : lo + len(orig) + pad]])
+    sf.write(case / "source.wav", y, SR)
+    meta["source_offset"] = min(pad, lo) / SR
+    (case / "meta.json").write_text(json.dumps(meta))
 
 
 if __name__ == "__main__":
