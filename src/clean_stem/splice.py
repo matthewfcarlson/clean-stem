@@ -15,6 +15,10 @@ from clean_stem.separate import Stems
 # Raised-cosine fade (seconds) into and out of each replaced span, placed just
 # outside the span so the word itself is fully covered.
 CROSSFADE = 0.03
+# The replaced word's own vocal, reversed, is mixed back in at this gain
+# (0.5 = -6 dB) so the gap keeps a voice-like presence without the word.
+# Chosen by ear on Blame Game over instrumental-only and full-level reversal.
+REVERSED_VOCAL_GAIN = 0.5
 
 STANDARD_MP3_BITRATES = (32, 40, 48, 56, 64, 80, 96, 112, 128, 160, 192, 224, 256, 320)
 
@@ -51,19 +55,26 @@ def replace_spans(
     spans: list[Span],
     stems: list[Stems],
     stems_rate: int,
+    reversed_vocal_gain: float = REVERSED_VOCAL_GAIN,
 ) -> np.ndarray:
-    """Return a copy of `audio` (channels, n) with each span swapped for instrumental."""
+    """Return a copy of `audio` (channels, n) with each span swapped for
+    instrumental plus the span's own vocal played backwards (radio-edit
+    style) at `reversed_vocal_gain`; 0 gives instrumental only."""
     out = audio.copy()
     fade = int(CROSSFADE * sample_rate)
     ramp = 0.5 - 0.5 * np.cos(np.linspace(0.0, np.pi, fade, dtype=np.float32)) if fade else np.zeros(0, np.float32)
 
+    def fit(stem: np.ndarray) -> np.ndarray:
+        if stems_rate != sample_rate:
+            stem = resample(stem, stems_rate, sample_rate)
+        if stem.shape[0] != out.shape[0]:
+            stem = np.broadcast_to(stem.mean(axis=0, keepdims=True), (out.shape[0], stem.shape[1]))
+        return stem
+
     for span in merge_spans(spans):
         window = _covering_stems(span, stems)
-        instrumental = window.instrumental
-        if stems_rate != sample_rate:
-            instrumental = resample(instrumental, stems_rate, sample_rate)
-        if instrumental.shape[0] != out.shape[0]:
-            instrumental = np.broadcast_to(instrumental.mean(axis=0, keepdims=True), (out.shape[0], instrumental.shape[1]))
+        instrumental = fit(window.instrumental)
+        vocals = fit(window.vocals) if reversed_vocal_gain else None
         window_start = int(window.start * sample_rate)
 
         # Mix weight for the instrumental across the song: 0 outside, 1 inside
@@ -80,8 +91,11 @@ def replace_spans(
         if n_out > 0:
             weight[-n_out:] = ramp[::-1][:n_out]
 
-        inst = instrumental[:, lo - window_start : hi - window_start]
-        out[:, lo:hi] = out[:, lo:hi] * (1 - weight) + inst * weight
+        fill = instrumental[:, lo - window_start : hi - window_start]
+        if vocals is not None:
+            # Reversed over the whole region, so the crossfades smooth its edges too.
+            fill = fill + reversed_vocal_gain * vocals[:, lo - window_start : hi - window_start][:, ::-1]
+        out[:, lo:hi] = out[:, lo:hi] * (1 - weight) + fill * weight
 
     return out
 

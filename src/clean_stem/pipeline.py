@@ -140,7 +140,7 @@ def locate(path: Path, models: Models, lyrics_mode: str = "auto") -> Located | s
 def clean(path: Path, models: Models, lyrics_mode: str = "auto") -> dict:
     """Censor one file in place, writing a .dirtystem sidecar. Returns a result dict."""
     from clean_stem.audio import decode_stereo
-    from clean_stem.splice import OPUS_SAMPLE_RATE, Span, encode_like, replace_spans
+    from clean_stem.splice import OPUS_SAMPLE_RATE, REVERSED_VOCAL_GAIN, Span, encode_like, replace_spans
 
     result = {"file": str(path)}
     if path.suffix.lower() not in SUPPORTED_SUFFIXES:
@@ -183,6 +183,7 @@ def clean(path: Path, models: Models, lyrics_mode: str = "auto") -> dict:
             "word_list_version": WORD_LIST_VERSION,
             "lyrics_source": located.lyrics_source,
             "whisper_model": models.whisper_model,
+            "fill": {"style": "instrumental+reversed-vocal", "reversed_vocal_gain": REVERSED_VOCAL_GAIN},
             "replacements": [
                 {"word": w.word, "start": round(w.start, 3), "end": round(w.end, 3), "method": w.method, "source": w.source}
                 for w in located.words

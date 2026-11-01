@@ -33,7 +33,7 @@ Lyrics gaps are covered three ways:
 
 Words heard where the isolated vocals are near-silent are discarded, since Whisper invents words over silence. `--lyrics plain|none` forces the fallbacks, for testing.
 
-`clean` replaces each flagged word with the Demucs instrumental for that moment (short crossfades either side), re-encodes in the original format and bitrate, copies all tags across, and swaps the file in place. Before swapping, it writes `song.mp3.dirtystem`: a zip with a `manifest.json` (what was replaced and why, plus hashes) and the original file's exact bytes, so `reverse` restores it bit-for-bit. Files that already have a sidecar are skipped.
+`clean` replaces each flagged word with the Demucs instrumental for that moment, plus the word's own vocal played backwards at -6 dB (the classic radio-edit trick, so the gap doesn't sound empty), with short crossfades either side, re-encodes in the original format and bitrate, copies all tags across, and swaps the file in place. Before swapping, it writes `song.mp3.dirtystem`: a zip with a `manifest.json` (what was replaced and why, plus hashes) and the original file's exact bytes, so `reverse` restores it bit-for-bit. Files that already have a sidecar are skipped.
 
 M4A files are re-encoded as AAC (libfdk_aac if ffmpeg has it, otherwise ffmpeg's `aac`) or ALAC to match the original. The original's `iTunSMPB` gapless tag is rewritten for the new encode's priming and padding: ffmpeg trusts it over the edit list, so the old one would shift the audio. `.mp4` (usually video), `.m4p` (DRM) and raw `.aac` are not touched.
 

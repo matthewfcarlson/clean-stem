@@ -73,3 +73,15 @@ def test_flac_reencode_keeps_bit_depth_and_unmodified_samples(tmp_path):
     assert mutagen.File(out).info.bits_per_sample == 16
     assert mutagen.File(out)["title"] == ["noise"]
     assert pcm(out) == pcm(src)
+
+
+def test_replace_spans_mixes_in_reversed_vocal():
+    audio = np.zeros((1, 10 * RATE), dtype=np.float32)
+    ramp = np.linspace(0.0, 1.0, 6 * RATE, dtype=np.float32)[None].repeat(2, 0)  # vocal rising over the window
+    window = Stems(start=2.0, end=8.0, vocals=ramp, instrumental=np.zeros((2, 6 * RATE), np.float32))
+    out = replace_spans(audio, RATE, [Span(4.0, 5.0)], [window], RATE, reversed_vocal_gain=0.5)
+    inside = out[0, int(4.1 * RATE) : int(4.9 * RATE)]
+    assert np.all(np.diff(inside) < 0)  # reversed: falling where the vocal rose
+    assert 0.1 < inside.max() < 0.25  # at half level (vocal there is ~0.33-0.5)
+    silent = replace_spans(audio, RATE, [Span(4.0, 5.0)], [window], RATE, reversed_vocal_gain=0.0)
+    assert np.all(silent == 0.0)
