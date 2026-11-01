@@ -44,3 +44,7 @@ M4A files are re-encoded as AAC (libfdk_aac if ffmpeg has it, otherwise ffmpeg's
 ```sh
 scripts/fetch_samples.sh /path/to/Music   # default: /Volumes/Media/Music
 ```
+
+## License
+
+GPL-3.0-or-later. See [LICENSE](LICENSE).
