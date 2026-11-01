@@ -21,7 +21,7 @@ from difflib import SequenceMatcher
 
 import numpy as np
 
-from clean_stem.align import FlaggedWord, Listener, TimedWord, match_words, normalize, pad_span, tokenize
+from clean_stem.align import FlaggedWord, Listener, TimedWord, match_words, normalize, tokenize
 from clean_stem.profanity import is_profane
 
 # A candidate is re-checked on the vocals this far either side of it.
@@ -93,7 +93,7 @@ def confirm_on_vocals(
                 continue
             if vocals_level_db(stems, w.start, w.end, sample_rate) < SILENCE_DB:
                 continue
-            found.append(FlaggedWord(w.text, -1, *pad_span(w.start, w.end, duration), "heard", "vocals-scan"))
+            found.append(FlaggedWord(w.text, -1, w.start, w.end, "heard", "vocals-scan"))
     return found
 
 
@@ -112,12 +112,12 @@ def locate_without_sync(
         tokens = tokenize(lyrics_text)
         flagged = [i for i, t in enumerate(tokens) if is_profane(t)]
         for i, (start, end, method) in sorted(match_words(tokens, heard, flagged).items()):
-            found.append(FlaggedWord(tokens[i], -1, *pad_span(start, end, duration), method, "vocals"))
+            found.append(FlaggedWord(tokens[i], -1, start, end, method, "vocals"))
         extras = unexplained_profanity(tokens, heard)
     else:
         extras = [w for w in heard if is_profane(w.text)]
 
     for w in extras:
         if not overlaps(w.start, w.end, found):
-            found.append(FlaggedWord(w.text, -1, *pad_span(w.start, w.end, duration), "heard", "vocals-scan"))
+            found.append(FlaggedWord(w.text, -1, w.start, w.end, "heard", "vocals-scan"))
     return sorted(found, key=lambda w: w.start)

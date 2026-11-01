@@ -33,8 +33,15 @@ WINDOW_PAD = 1.0
 MIN_ENRICH_SIMILARITY = 0.75
 # Extra margin either side of a word whose position is only estimated.
 ESTIMATE_PAD = 0.5
-# Whisper word timestamps are tight and clip consonants at either end, so
-# widen located words. Tuned by muting sample tracks and listening for leaks.
+# Whisper word timestamps are only good to ~0.1-0.2 s. Cut edges are moved
+# outward from them to the nearest gap in the isolated vocal: the first point
+# GAP_DB below the word's peak, searched up to SNAP_BEFORE/SNAP_AFTER away.
+GAP_DB = 20.0
+SNAP_BEFORE = 0.25
+SNAP_AFTER = 0.3
+SNAP_FRAME = 0.01
+# Without a clear gap (legato singing), fall back to fixed padding. Tuned by
+# muting sample tracks and listening for leaks.
 WORD_PAD_BEFORE = 0.15
 WORD_PAD_AFTER = 0.25
 MIN_WORD_LENGTH = 0.5
@@ -162,6 +169,59 @@ def pad_span(start: float, end: float, duration: float) -> tuple[float, float]:
     return max(0.0, start), min(duration, end)
 
 
+def snap_to_gaps(start: float, end: float, stems: list, sample_rate: int) -> tuple[float | None, float | None]:
+    """Move each edge of a word outward to the nearest gap in the vocal stem.
+
+    Only ever widens the span, so a dip inside the word (a stop consonant)
+    can't truncate it. Each edge is None if no gap was found within range.
+    """
+    covering = [s for s in stems if s.start <= start - SNAP_BEFORE and end + SNAP_AFTER <= s.end]
+    if not covering:
+        covering = [s for s in stems if s.start <= start and end <= s.end]
+    if not covering:
+        return None, None
+    stem = covering[0]
+    hop = int(SNAP_FRAME * sample_rate)
+    vocals = stem.vocals.mean(axis=0)
+    n = len(vocals) // hop
+    env = 20 * np.log10(np.sqrt(np.mean(np.square(vocals[: n * hop].reshape(n, hop), dtype=np.float64), axis=1)) + 1e-9)
+
+    def index(t: float) -> int:
+        return min(n - 1, max(0, int((t - stem.start) / SNAP_FRAME)))
+
+    i0, i1 = index(start), index(end)
+    threshold = env[i0 : i1 + 1].max() - GAP_DB
+
+    j = i0
+    lo = index(start - SNAP_BEFORE)
+    while j > lo and env[j] >= threshold:
+        j -= 1
+    new_start = stem.start + j * SNAP_FRAME if env[j] < threshold else None
+
+    k = i1
+    hi = index(end + SNAP_AFTER)
+    while k < hi and env[k] >= threshold:
+        k += 1
+    new_end = stem.start + (k + 1) * SNAP_FRAME if env[k] < threshold else None
+    return new_start, new_end
+
+
+def fit_spans(words: list[FlaggedWord], stems: list, sample_rate: int, duration: float) -> list[FlaggedWord]:
+    """Turn raw word timings into cut spans: snapped to vocal gaps where there
+    are any, padded where there aren't. Estimated spans are already wide."""
+    fitted = []
+    for w in words:
+        if w.method == "estimated":
+            fitted.append(w)
+            continue
+        padded_start, padded_end = pad_span(w.start, w.end, duration)
+        snapped_start, snapped_end = snap_to_gaps(w.start, w.end, stems, sample_rate)
+        start = snapped_start if snapped_start is not None else padded_start
+        end = snapped_end if snapped_end is not None else padded_end
+        fitted.append(FlaggedWord(w.word, w.line, max(0.0, start), min(duration, end), w.method, w.source))
+    return fitted
+
+
 def estimate_timing(text: str, token_index: int, line_start: float, line_end: float) -> tuple[float, float]:
     """Guess a word's timing by assuming the line is sung at an even pace."""
     spans = [m.span() for m in _TOKEN_RE.finditer(text)]
@@ -236,7 +296,7 @@ def align_flagged_words(
             if i in best and best[i][:2] not in claimed:
                 word_start, word_end, method, name = best[i]
                 claimed.add((word_start, word_end))
-                found.append(FlaggedWord(tokens[i], idx, *pad_span(word_start, word_end, duration), method, name))
+                found.append(FlaggedWord(tokens[i], idx, word_start, word_end, method, name))
             else:
                 est_start, est_end = estimate_timing(line.text, i, line.time, line_end)
                 found.append(FlaggedWord(tokens[i], idx, est_start, est_end, "estimated", ""))

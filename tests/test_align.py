@@ -1,3 +1,5 @@
+import numpy as np
+
 from clean_stem.align import TimedWord, align_flagged_words, estimate_timing, match_words, pad_span, tokenize
 from clean_stem.lookup import SyncedLine
 
@@ -59,8 +61,8 @@ def test_align_flagged_words_uses_window_offsets_and_skips_clean_lines():
     # Only the profane line is transcribed: from 1s before it to 1s after the next line starts.
     assert listener.calls == [(11.0, 15.0)]
     assert [(w.word, w.line, w.method, w.source) for w in words] == [("fucker", 1, "heard", "vocals")]
-    # Heard at 13.0-13.2, then padded out to the minimum length.
-    assert (round(words[0].start, 2), round(words[0].end, 2)) == (12.85, 13.45)
+    # Raw timing; cut spans are fitted later (fit_spans).
+    assert (round(words[0].start, 2), round(words[0].end, 2)) == (13.0, 13.2)
 
 
 def test_pad_span_widens_and_clamps():
@@ -138,3 +140,41 @@ def test_flagged_words_sharing_a_span_fall_back_to_estimate():
     words = align_flagged_words(lines, 20.0, [("vocals", listener)])
     assert [w.method for w in words] == ["inferred", "estimated"]
     assert words[1].start > words[0].start
+
+
+def _stems_with_vocal(segments, duration=10.0, rate=1000):
+    """Vocal stem that is loud (0.5) inside each (start, end) segment, -80 dB elsewhere."""
+    from clean_stem.separate import Stems
+
+    vocals = np.full((2, int(duration * rate)), 1e-4, np.float32)
+    for start, end in segments:
+        vocals[:, int(start * rate) : int(end * rate)] = 0.5
+    return [Stems(0.0, duration, vocals, np.zeros_like(vocals))]
+
+
+def test_fit_spans_snaps_outward_to_vocal_gaps():
+    from clean_stem.align import FlaggedWord, fit_spans
+
+    # "fame" 3.0-3.6, gap, "fuck" 3.75-3.95, stop-consonant dip, "-er" 4.0-4.3, gap, next word 4.6-5.0
+    stems = _stems_with_vocal([(3.0, 3.6), (3.75, 3.95), (4.0, 4.3), (4.6, 5.0)])
+    # Whisper's timing is a little late and short: 3.8-4.1.
+    word = FlaggedWord("fucker", 0, 3.8, 4.1, "heard", "vocals")
+    [fitted] = fit_spans([word], stems, 1000, 10.0)
+    assert 3.6 <= fitted.start <= 3.75  # in the gap after "fame", not into it
+    assert 4.3 <= fitted.end <= 4.6  # covers "-er", stops before the next word
+
+
+def test_fit_spans_pads_when_there_is_no_gap():
+    from clean_stem.align import FlaggedWord, fit_spans, pad_span
+
+    stems = _stems_with_vocal([(2.0, 6.0)])  # one long legato phrase
+    word = FlaggedWord("damn", 0, 3.8, 4.1, "heard", "vocals")
+    [fitted] = fit_spans([word], stems, 1000, 10.0)
+    assert (fitted.start, fitted.end) == pad_span(3.8, 4.1, 10.0)
+
+
+def test_fit_spans_leaves_estimates_alone():
+    from clean_stem.align import FlaggedWord, fit_spans
+
+    word = FlaggedWord("fag", 0, 1.0, 3.0, "estimated", "")
+    assert fit_spans([word], _stems_with_vocal([(1.5, 2.5)]), 1000, 10.0) == [word]

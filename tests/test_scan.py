@@ -1,3 +1,4 @@
+import pytest
 import numpy as np
 
 from clean_stem.align import FlaggedWord, TimedWord, tokenize
@@ -59,7 +60,7 @@ def test_confirm_on_vocals_requires_audible_nearby_profanity():
 
     found = confirm_on_vocals(candidates, vocals, stems, RATE, 10.0)
     assert [(w.word, w.method, w.source) for w in found] == [("fucking", "heard", "vocals-scan")]
-    assert found[0].start < 2.1 < found[0].end  # timed from the vocals, not the mix
+    assert (found[0].start, found[0].end) == pytest.approx((2.1, 2.3))  # timed from the vocals, not the mix
 
 
 def test_locate_without_sync_uses_plain_lyrics_and_adds_extras():

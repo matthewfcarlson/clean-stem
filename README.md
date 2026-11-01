@@ -23,7 +23,7 @@ uv run pytest                               # CLEAN_STEM_ONLINE=1 to include onl
 
 Lyrics come from embedded tags first, then [LRCLIB](https://lrclib.net) (matched on artist, title, album and duration; often includes line timestamps), then [lyrics.ovh](https://lyrics.ovh).
 
-`align` uses LRCLIB's line timestamps to pick a few seconds around each flagged line, isolates the vocals in that window with Demucs, transcribes them with faster-whisper, and lines the transcript up against the known lyrics. If a word isn't clearly heard on the vocals, the full mix is tried too. Each word is reported as `heard` (Whisper heard it), `inferred` (placed between the neighbouring words it did hear) or `estimated` (Whisper couldn't make out the line; position guessed from the line timing).
+`align` uses LRCLIB's line timestamps to pick a few seconds around each flagged line, isolates the vocals in that window with Demucs, transcribes them with faster-whisper, and lines the transcript up against the known lyrics. If a word isn't clearly heard on the vocals, the full mix is tried too. Cut edges are then moved outward from Whisper's word boundaries to the nearest gap in the isolated vocal, so only the swear itself is replaced (e.g. "fame f\*\*\*er" keeps "fame"); where words run together with no gap, a fixed padding is used instead. Each word is reported as `heard` (Whisper heard it), `inferred` (placed between the neighbouring words it did hear) or `estimated` (Whisper couldn't make out the line; position guessed from the line timing).
 
 Lyrics gaps are covered three ways:
 

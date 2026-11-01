@@ -112,6 +112,7 @@ def locate(path: Path, models: Models, lyrics_mode: str = "auto") -> Located | s
             if not scan.overlaps(w.start, w.end, words)
         ]
         words += scan.confirm_on_vocals(candidates, vocals, stems, separator.sample_rate, track.duration)
+        words = align.fit_spans(words, stems, separator.sample_rate, track.duration)
         return Located(track, fetched.source, sorted(words, key=lambda w: w.start), synced, stems)
 
     # No line timings. Use plain lyrics if we can find them.
@@ -134,6 +135,7 @@ def locate(path: Path, models: Models, lyrics_mode: str = "auto") -> Located | s
 
     vocals_transcript = vocals(0.0, track.duration)
     words = scan.locate_without_sync(lyrics_text, vocals_transcript, stems, separator.sample_rate, track.duration)
+    words = align.fit_spans(words, stems, separator.sample_rate, track.duration)
     return Located(track, lyrics_source or "transcript", words, [], stems)
 
 
