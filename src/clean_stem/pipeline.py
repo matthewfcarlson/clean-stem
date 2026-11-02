@@ -24,6 +24,11 @@ from clean_stem.state import StateDB
 
 SUPPORTED_SUFFIXES = (".mp3", ".flac", ".m4a", ".ogg", ".opus")
 
+# How censored spans are filled: "reversed" (instrumental plus the word's
+# vocal reversed) or "sung" (a clean word sung in the artist's voice where the
+# swear is sung, "reversed" elsewhere; needs Seed-VC).
+FILLS = ("reversed", "sung")
+
 
 @dataclass
 class Models:
@@ -32,6 +37,8 @@ class Models:
 
     whisper_model: str = align.DEFAULT_MODEL
     state: StateDB | None = None
+    fill: str = "reversed"
+    seedvc_dir: Path | None = None
 
     def __post_init__(self):
         wrap = (lambda p: CachedProvider(p, self.state)) if self.state else (lambda p: p)
@@ -47,6 +54,15 @@ class Models:
         from clean_stem.separate import Separator
 
         return Separator()
+
+    @cached_property
+    def sung(self):
+        from clean_stem.sung import SeedVCError, SungFill, default_seedvc_dir
+
+        seedvc_dir = self.seedvc_dir or default_seedvc_dir()
+        if seedvc_dir is None:
+            raise SeedVCError("the sung fill needs a Seed-VC checkout: pass --seedvc or set $CLEAN_STEM_SEEDVC")
+        return SungFill(seedvc_dir)
 
 
 @dataclass
@@ -139,6 +155,45 @@ def locate(path: Path, models: Models, lyrics_mode: str = "auto") -> Located | s
     return Located(track, lyrics_source or "transcript", words, [], stems)
 
 
+def sing_spans(located: Located, models: Models, sample_rate: int) -> tuple[list, list[str]]:
+    """Spans for the located words, with sung vocals where the sung fill
+    applies, and each word's fill ("sung:<word>" or "reversed (<why>)")."""
+    from clean_stem.splice import CROSSFADE, Span, _covering_stems
+    from clean_stem.sung import SAMPLE_RATE, SeedVCError, build_reference, substitute
+
+    words = located.words
+    spans = [Span(w.start, w.end) for w in words]
+    if sample_rate != SAMPLE_RATE:
+        return spans, [f"reversed (stems at {sample_rate} Hz)"] * len(words)
+
+    ref_id = None
+    fills = []
+    for i, w in enumerate(words):
+        sub = substitute(w.word)
+        # Spans this close get merged when spliced, and lose their sung vocal.
+        crowded = any(j != i and v.start - 2 * CROSSFADE <= w.end and w.start <= v.end + 2 * CROSSFADE for j, v in enumerate(words))
+        if sub is None:
+            fills.append("reversed (no substitute)")
+            continue
+        if crowded:
+            fills.append("reversed (next to another word)")
+            continue
+        if ref_id is None:
+            reference = build_reference(located.stems, [(v.start, v.end) for v in words], sample_rate)
+            ref_id = models.sung.set_reference(reference)
+        try:
+            result = models.sung.convert(ref_id, _covering_stems(spans[i], located.stems), w.start, w.end, sub, sample_rate)
+        except SeedVCError as e:
+            fills.append(f"reversed (conversion failed: {e})")
+            continue
+        if isinstance(result, str):
+            fills.append(f"reversed ({result})")
+            continue
+        spans[i] = Span(w.start, w.end, sung=result)
+        fills.append(f"sung:{sub}")
+    return spans, fills
+
+
 def clean(path: Path, models: Models, lyrics_mode: str = "auto") -> dict:
     """Censor one file in place, writing a .dirtystem sidecar. Returns a result dict."""
     from clean_stem.audio import decode_stereo
@@ -175,7 +230,13 @@ def clean(path: Path, models: Models, lyrics_mode: str = "auto") -> dict:
     audio = decode_stereo(path, sample_rate)
     if channels == 1:
         audio = audio[:1]
-    spans = [Span(w.start, w.end) for w in located.words]
+    if models.fill == "sung":
+        spans, fills = sing_spans(located, models, models.separator.sample_rate)
+        fill = {"style": "sung", "fallback": "instrumental+reversed-vocal", "reversed_vocal_gain": REVERSED_VOCAL_GAIN}
+    else:
+        spans = [Span(w.start, w.end) for w in located.words]
+        fills = ["reversed"] * len(spans)
+        fill = {"style": "instrumental+reversed-vocal", "reversed_vocal_gain": REVERSED_VOCAL_GAIN}
     cleaned = replace_spans(audio, sample_rate, spans, located.stems, models.separator.sample_rate)
 
     tmp = path.with_name(f".{path.stem}.cleaning{path.suffix}")
@@ -185,10 +246,10 @@ def clean(path: Path, models: Models, lyrics_mode: str = "auto") -> dict:
             "word_list_version": WORD_LIST_VERSION,
             "lyrics_source": located.lyrics_source,
             "whisper_model": models.whisper_model,
-            "fill": {"style": "instrumental+reversed-vocal", "reversed_vocal_gain": REVERSED_VOCAL_GAIN},
+            "fill": fill,
             "replacements": [
-                {"word": w.word, "start": round(w.start, 3), "end": round(w.end, 3), "method": w.method, "source": w.source}
-                for w in located.words
+                {"word": w.word, "start": round(w.start, 3), "end": round(w.end, 3), "method": w.method, "source": w.source, "fill": f}
+                for w, f in zip(located.words, fills)
             ],
         }
         shutil.copymode(path, tmp)

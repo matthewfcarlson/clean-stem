@@ -16,7 +16,7 @@ from clean_stem.lookup import (
     read_track_info,
 )
 from clean_stem.lyrics import read_embedded_lyrics
-from clean_stem.pipeline import LYRICS_MODES
+from clean_stem.pipeline import FILLS, LYRICS_MODES
 from clean_stem.profanity import WORD_LIST_VERSION, find_profanity
 
 
@@ -150,7 +150,15 @@ def cmd_clean(args: argparse.Namespace) -> int:
     from clean_stem.pipeline import Models, clean
 
     state = open_state(args)
-    models = Models(whisper_model=args.model or Models.whisper_model, state=state)
+    models = Models(whisper_model=args.model or Models.whisper_model, state=state, fill=args.fill, seedvc_dir=args.seedvc)
+    if args.fill == "sung":
+        from clean_stem.sung import SeedVCError
+
+        try:
+            models.sung  # fail now, not on every file, if Seed-VC isn't set up
+        except SeedVCError as e:
+            print(f"error: {e}", file=sys.stderr)
+            return 2
     files = list(iter_audio_files(args.files))
     results = []
     counts: Counter = Counter()
@@ -170,9 +178,12 @@ def cmd_clean(args: argparse.Namespace) -> int:
         if not args.json:
             detail = result.get("reason") or result.get("lyrics_source", "")
             if result["status"] == "cleaned":
-                detail = f"{len(result['replacements'])} words replaced  [{detail}]"
+                sung = sum(r["fill"].startswith("sung:") for r in result["replacements"])
+                detail = f"{len(result['replacements'])} words replaced{f', {sung} sung' if sung else ''}  [{detail}]"
             elapsed = time.monotonic() - started
             print(f"[{n}/{len(files)}] {result['status'].upper():8} {path}  {detail}  ({elapsed:.0f}s)", flush=True)
+    if args.fill == "sung":
+        models.sung.close()
     if args.json:
         json.dump(results, sys.stdout, indent=2)
         print()
@@ -232,6 +243,8 @@ def main(argv: list[str] | None = None) -> int:
     clean.add_argument("--model", help="Whisper model size (default: small)")
     clean.add_argument("--lyrics", choices=LYRICS_MODES, default="auto", help=LYRICS_HELP)
     clean.add_argument("--json", action="store_true", help="Output JSON")
+    clean.add_argument("--fill", choices=FILLS, default="reversed", help="reversed: instrumental plus the word's vocal reversed; sung: sing a clean word in the artist's voice where the swear is sung (needs Seed-VC)")
+    clean.add_argument("--seedvc", type=Path, default=None, help="Seed-VC checkout for --fill sung (default: $CLEAN_STEM_SEEDVC)")
     clean.set_defaults(func=cmd_clean)
 
     rev = sub.add_parser("reverse", help="Restore originals from .dirtystem sidecars")

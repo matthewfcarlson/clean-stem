@@ -35,6 +35,20 @@ Words heard where the isolated vocals are near-silent are discarded, since Whisp
 
 `clean` replaces each flagged word with the Demucs instrumental for that moment, plus the word's own vocal played backwards at -6 dB (the classic radio-edit trick, so the gap doesn't sound empty), with short crossfades either side, re-encodes in the original format and bitrate, copies all tags across, and swaps the file in place. Before swapping, it writes `song.mp3.dirtystem`: a zip with a `manifest.json` (what was replaced and why, plus hashes) and the original file's exact bytes, so `reverse` restores it bit-for-bit. Files that already have a sidecar are skipped.
 
+### Sung replacements (optional)
+
+`clean --fill sung` goes further where the swear is *sung*: it sings a clean word in its place ("fame f\*\*\*er" becomes "fame sucker") in the artist's own voice. The word is spoken by text-to-speech (`say` on macOS, `espeak-ng` elsewhere), reshaped with WORLD to the swear's length and melody, then converted to the artist's voice with [Seed-VC](https://github.com/Plachtaa/seed-vc), using about 8 seconds of their separated vocals as the reference. Rapped or short words, swears without a substitute (see `SUBSTITUTES` in `src/clean_stem/sung.py`), and anything that fails to convert get the default fill instead. Each replacement's fill is recorded in the sidecar, and `reverse` works the same.
+
+Seed-VC runs in its own Python 3.10 environment, set up once with:
+
+```sh
+scripts/setup_seedvc.sh ~/.cache/clean-stem/seed-vc
+export CLEAN_STEM_SEEDVC=~/.cache/clean-stem/seed-vc
+uv run clean-stem clean --fill sung path/to/music
+```
+
+It costs roughly 15-25 s per sung word on CPU (`CLEAN_STEM_SUNG_STEPS`, default 30 diffusion steps; 15 is about twice as fast).
+
 M4A files are re-encoded as AAC (libfdk_aac if ffmpeg has it, otherwise ffmpeg's `aac`) or ALAC to match the original. The original's `iTunSMPB` gapless tag is rewritten for the new encode's priming and padding: ffmpeg trusts it over the edit list, so the old one would shift the audio. `.mp4` (usually video), `.m4p` (DRM) and raw `.aac` are not touched.
 
 `clean` keeps a SQLite state file (`~/.cache/clean-stem/state.db`, or `--state` / `$CLEAN_STEM_STATE`) with every file's size, mtime and outcome, plus cached lyrics lookups. Re-running over a library only touches new or changed files; lookups that failed (site down, rate-limited) are retried next run, and files restored with `reverse` are left alone.

@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import functools
 import subprocess
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 
 import numpy as np
@@ -27,10 +27,14 @@ STANDARD_MP3_BITRATES = (32, 40, 48, 56, 64, 80, 96, 112, 128, 160, 192, 224, 25
 class Span:
     start: float
     end: float
+    # A replacement vocal for the span (sung.SungVocal); None uses the
+    # reversed-vocal fill.
+    sung: object | None = field(default=None, compare=False)
 
 
 def merge_spans(spans: list[Span], gap: float = 2 * CROSSFADE) -> list[Span]:
-    """Merge spans that overlap or sit closer together than `gap` seconds."""
+    """Merge spans that overlap or sit closer together than `gap` seconds.
+    Merged spans lose any sung vocal and get the default fill."""
     merged: list[Span] = []
     for span in sorted(spans, key=lambda s: s.start):
         if merged and span.start - merged[-1].end <= gap:
@@ -59,7 +63,8 @@ def replace_spans(
 ) -> np.ndarray:
     """Return a copy of `audio` (channels, n) with each span swapped for
     instrumental plus the span's own vocal played backwards (radio-edit
-    style) at `reversed_vocal_gain`; 0 gives instrumental only."""
+    style) at `reversed_vocal_gain`; 0 gives instrumental only. Spans with a
+    sung vocal get instrumental plus that vocal instead."""
     out = audio.copy()
     fade = int(CROSSFADE * sample_rate)
     ramp = 0.5 - 0.5 * np.cos(np.linspace(0.0, np.pi, fade, dtype=np.float32)) if fade else np.zeros(0, np.float32)
@@ -74,7 +79,7 @@ def replace_spans(
     for span in merge_spans(spans):
         window = _covering_stems(span, stems)
         instrumental = fit(window.instrumental)
-        vocals = fit(window.vocals) if reversed_vocal_gain else None
+        vocals = fit(window.vocals) if reversed_vocal_gain and span.sung is None else None
         window_start = int(window.start * sample_rate)
 
         # Mix weight for the instrumental across the song: 0 outside, 1 inside
@@ -92,7 +97,16 @@ def replace_spans(
             weight[-n_out:] = ramp[::-1][:n_out]
 
         fill = instrumental[:, lo - window_start : hi - window_start]
-        if vocals is not None:
+        if span.sung is not None:
+            # The sung vocal replaces the span's vocals; the crossfades blend
+            # it with the original mix on either side.
+            sung = fit(span.sung.audio[None, :])
+            at = int(span.sung.start * sample_rate) - lo
+            placed = np.zeros_like(fill)
+            a, b = max(0, at), min(hi - lo, at + sung.shape[1])
+            placed[:, a:b] = sung[:, a - at : b - at]
+            fill = fill + placed
+        elif vocals is not None:
             # Reversed over the whole region, so the crossfades smooth its edges too.
             fill = fill + reversed_vocal_gain * vocals[:, lo - window_start : hi - window_start][:, ::-1]
         out[:, lo:hi] = out[:, lo:hi] * (1 - weight) + fill * weight
