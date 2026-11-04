@@ -327,10 +327,12 @@ def summary(results: dict) -> str:
 
 def compare(a: dict, b: dict) -> list[str]:
     lines = []
-    for name in sorted(set(a) | set(b)):
-        ra, rb = a.get(name), b.get(name)
-        if not ra or not rb or "skipped" in ra or "skipped" in rb:
-            lines.append(f"{name:22} {'(not comparable)' if ra and rb else '(only in one run)'}")
+    for name in sorted(set(a) & set(b)):  # runs may cover different cases
+        ra, rb = a[name], b[name]
+        if "skipped" in ra and "skipped" in rb:
+            continue  # default fill both times
+        if "skipped" in ra or "skipped" in rb:
+            lines.append(f"{name:22} sung in only one run")
             continue
         diffs = []
         for k in ("onset_ms", "dip_db", "level_db", "attack_db", "click_db", "speaker", "pesq"):

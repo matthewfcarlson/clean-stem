@@ -44,12 +44,13 @@ def test_spike_db_flags_a_click_not_a_steady_sound():
 
 def test_compare_reports_fixes_and_breaks():
     row = {"heard": "x", "onset_ms": 0, "dip_db": 0, "level_db": 0, "attack_db": 0, "click_db": 0, "speaker": 0.5, "pesq": 2.0, "pass": False}
-    a = {"c1": row, "c2": {**row, "pass": True}, "c3": {"skipped": "too short"}}
-    b = {"c1": {**row, "dip_db": 1.0, "pass": True}, "c2": {**row, "pass": False}, "c3": {"skipped": "too short"}}
+    a = {"c1": row, "c2": {**row, "pass": True}, "c3": {"skipped": "too short"}, "c4": row, "c5": {"skipped": "x"}}
+    b = {"c1": {**row, "dip_db": 1.0, "pass": True}, "c2": {**row, "pass": False}, "c3": {"skipped": "too short"}, "c5": row}
     lines = compare(a, b)
     assert lines[0].endswith("dip_db 0->1.0  FIXED")
     assert lines[1].endswith("same  BROKE")
-    assert "not comparable" in lines[2]
+    assert lines[2].endswith("sung in only one run")
+    assert len(lines) == 3  # c3 skipped both times, c4 only in one run
 
 
 def test_passes_uses_limits():

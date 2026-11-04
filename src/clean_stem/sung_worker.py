@@ -63,6 +63,14 @@ MIN_HELD = 0.4
 MAX_LEAD = 0.08
 # "A gap" is vocals this far below the swear's peak, in 10 ms frames.
 GAP_DB = 20
+# Where the new word's opening consonant comes from: "seedvc" (converted with
+# the rest) or "source" (kept from the resynthesized TTS word, crossfaded into
+# the converted vowel). Consonants carry little of a voice's identity, and
+# Seed-VC tends to leave a dip between consonant and vowel.
+CONSONANT = os.environ.get("CLEAN_STEM_SUNG_CONSONANT", "seedvc")
+# The crossfade into the converted vowel, ending this far into it.
+CONSONANT_FADE = 0.015
+CONSONANT_OVERLAP = 0.01
 
 
 def log(*args):
@@ -152,6 +160,7 @@ def vowel_onset(f0, level):
 
 def reshape(word, orig):
     """Resynthesize `word` with the timing, loudness and pitch contour of `orig`.
+    Returns the audio and the sample where its vowel starts.
 
     The new word's opening consonant keeps its own length and loudness and
     ends where the vowel of `orig` starts, so its vowel lands where the old one did;
@@ -198,7 +207,8 @@ def reshape(word, orig):
     gain[:onset] = 0.0
     y *= np.interp(np.arange(len(y)) / SR, t_o, gain)
     voiced_part = y[int(t_o[v_o] * SR) :]
-    return (y * (rms(orig[int(t_o[v_o] * SR) :]) / rms(voiced_part))).astype(np.float32)
+    vowel_at = int(t_o[v_o] * SR)
+    return (y * (rms(orig[vowel_at:]) / rms(voiced_part))).astype(np.float32), vowel_at
 
 
 class SeedVC:
@@ -291,9 +301,18 @@ def handle(vc, req):
         i = lead_in(clip, i, j, req.get("max_lead", 0))
         # Keep the singer's real vocals either side of the new word: the model
         # gets context, and its edge artifacts land outside the word.
-        source = np.concatenate([clip[:i], reshape(speak(req["word"]), clip[i:j]), clip[j:]])
+        new, vowel_at = reshape(speak(req["word"]), clip[i:j])
+        source = np.concatenate([clip[:i], new, clip[j:]])
         out = vc.convert(req["ref"], source)
         out *= level / rms(out[req["start"] : j])
+        if CONSONANT == "source" and vowel_at > 0:
+            # Source and output are both at the swear's level from the vowel on.
+            end = i + vowel_at + int(CONSONANT_OVERLAP * SR)
+            fade = min(int(CONSONANT_FADE * SR), end - i)
+            w = 0.5 - 0.5 * np.cos(np.linspace(0, np.pi, fade))
+            src = source * (rms(out[i + vowel_at : j]) / rms(source[i + vowel_at : j]))
+            out[i : end - fade] = src[i : end - fade]
+            out[end - fade : end] = src[end - fade : end] * (1 - w) + out[end - fade : end] * w
         np.save(req["out"], out.astype(np.float32))
         return {"sung": True, "start": int(i)}
     if req["op"] == "score":
