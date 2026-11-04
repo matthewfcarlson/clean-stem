@@ -155,11 +155,40 @@ def locate(path: Path, models: Models, lyrics_mode: str = "auto") -> Located | s
     return Located(track, lyrics_source or "transcript", words, [], stems)
 
 
+@dataclass(frozen=True)
+class SungPlan:
+    """Whether a located word gets the sung fill, before any conversion."""
+
+    substitute: str | None  # the word to sing, or None to keep the default fill
+    reason: str | None  # why not, when substitute is None
+    max_lead: float = 0.0  # how early (s) the new word may start
+
+
+def plan_sung(words: list[align.FlaggedWord]) -> list[SungPlan]:
+    from clean_stem.splice import CROSSFADE
+    from clean_stem.sung import substitute
+
+    plans = []
+    for i, w in enumerate(words):
+        sub = substitute(w.word)
+        # Spans this close get merged when spliced, and lose their sung vocal.
+        crowded = any(j != i and v.start - 2 * CROSSFADE <= w.end and w.start <= v.end + 2 * CROSSFADE for j, v in enumerate(words))
+        if sub is None:
+            plans.append(SungPlan(None, "no substitute"))
+        elif crowded:
+            plans.append(SungPlan(None, "next to another word"))
+        else:
+            # It may start a little early, but not so early it merges with a neighbour.
+            before = max((v.end for v in words if v.end <= w.start), default=0.0)
+            plans.append(SungPlan(sub, None, w.start - before - 2 * CROSSFADE - 0.01))
+    return plans
+
+
 def sing_spans(located: Located, models: Models, sample_rate: int) -> tuple[list, list[str]]:
     """Spans for the located words, with sung vocals where the sung fill
     applies, and each word's fill ("sung:<word>" or "reversed (<why>)")."""
-    from clean_stem.splice import CROSSFADE, Span, _covering_stems
-    from clean_stem.sung import SAMPLE_RATE, SeedVCError, build_reference, substitute
+    from clean_stem.splice import Span, _covering_stems
+    from clean_stem.sung import SAMPLE_RATE, SeedVCError, build_reference
 
     words = located.words
     spans = [Span(w.start, w.end) for w in words]
@@ -168,25 +197,16 @@ def sing_spans(located: Located, models: Models, sample_rate: int) -> tuple[list
 
     ref_id = None
     fills = []
-    for i, w in enumerate(words):
-        sub = substitute(w.word)
-        # Spans this close get merged when spliced, and lose their sung vocal.
-        crowded = any(j != i and v.start - 2 * CROSSFADE <= w.end and w.start <= v.end + 2 * CROSSFADE for j, v in enumerate(words))
-        if sub is None:
-            fills.append("reversed (no substitute)")
-            continue
-        if crowded:
-            fills.append("reversed (next to another word)")
+    for i, (w, plan) in enumerate(zip(words, plan_sung(words))):
+        if plan.substitute is None:
+            fills.append(f"reversed ({plan.reason})")
             continue
         if ref_id is None:
             reference = build_reference(located.stems, [(v.start, v.end) for v in words], sample_rate)
             ref_id = models.sung.set_reference(reference)
-        # It may start a little early, but not so early it merges with a neighbour.
-        before = max((v.end for v in words if v.end <= w.start), default=0.0)
-        max_lead = w.start - before - 2 * CROSSFADE - 0.01
         try:
             result = models.sung.convert(
-                ref_id, _covering_stems(spans[i], located.stems), w.start, w.end, sub, sample_rate, max_lead
+                ref_id, _covering_stems(spans[i], located.stems), w.start, w.end, plan.substitute, sample_rate, plan.max_lead
             )
         except SeedVCError as e:
             fills.append(f"reversed (conversion failed: {e})")
@@ -195,7 +215,7 @@ def sing_spans(located: Located, models: Models, sample_rate: int) -> tuple[list
             fills.append(f"reversed ({result})")
             continue
         spans[i] = Span(min(w.start, result.word_start), w.end, sung=result)
-        fills.append(f"sung:{sub}")
+        fills.append(f"sung:{plan.substitute}")
     return spans, fills
 
 

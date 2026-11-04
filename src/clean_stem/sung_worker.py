@@ -17,6 +17,10 @@ stdout. Audio is exchanged as mono float32 .npy files at 44.1 kHz.
         otherwise writes the clip with the swear replaced by `word` to `out`
         and replies {"sung": true, "start": i2}: the new word may start up to
         `max_lead` samples early, in a gap before the swear, at i2.
+    {"op": "score", "ref": ..., "paths": [...]}
+        For the bench: how much each clip sounds like the reference voice
+        (cosine similarity of speaker embeddings) and SQUIM's estimates of
+        its quality. Replies {"scores": [{"speaker", "stoi", "pesq", "si_sdr"}]}.
 """
 
 import json
@@ -215,13 +219,27 @@ class SeedVC:
         (self.model, self.semantic_fn, self.f0_fn, self.vocoder_fn, self.campplus, self.mel_fn, _) = inference.load_models(args)
         self.refs = {}
 
+    def speaker(self, waves_16k):
+        """Speaker embedding (CAM++, as Seed-VC uses for style)."""
+        fbank = torchaudio.compliance.kaldi.fbank(waves_16k, num_mel_bins=80, dither=0, sample_frequency=16000)
+        return self.campplus((fbank - fbank.mean(dim=0, keepdim=True)).unsqueeze(0))
+
+    @torch.no_grad()
+    def score(self, ref_id, audio):
+        waves_16k = torchaudio.functional.resample(torch.tensor(audio).unsqueeze(0).float(), SR, 16000)
+        style = self.refs[ref_id][1]
+        speaker = float(torch.nn.functional.cosine_similarity(self.speaker(waves_16k), style).item())
+        if not hasattr(self, "squim"):
+            self.squim = torchaudio.pipelines.SQUIM_OBJECTIVE.get_model()
+        stoi, pesq, si_sdr = (float(v.item()) for v in self.squim(waves_16k))
+        return {"speaker": speaker, "stoi": stoi, "pesq": pesq, "si_sdr": si_sdr}
+
     @torch.no_grad()
     def reference(self, ref_id, audio):
         audio = torch.tensor(audio[: int(SR * MAX_REFERENCE)]).unsqueeze(0).float()
         waves_16k = torchaudio.functional.resample(audio, SR, 16000)
         mel = self.mel_fn(audio)
-        fbank = torchaudio.compliance.kaldi.fbank(waves_16k, num_mel_bins=80, dither=0, sample_frequency=16000)
-        style = self.campplus((fbank - fbank.mean(dim=0, keepdim=True)).unsqueeze(0))
+        style = self.speaker(waves_16k)
         f0 = torch.from_numpy(self.f0_fn(waves_16k[0], thred=0.03)).float()[None]
         prompt, *_ = self.model.length_regulator(
             self.semantic_fn(waves_16k), ylens=torch.LongTensor([mel.size(2)]), n_quantizers=3, f0=f0
@@ -278,6 +296,8 @@ def handle(vc, req):
         out *= level / rms(out[req["start"] : j])
         np.save(req["out"], out.astype(np.float32))
         return {"sung": True, "start": int(i)}
+    if req["op"] == "score":
+        return {"scores": [vc.score(req["ref"], np.load(path)) for path in req["paths"]]}
     raise ValueError(f"unknown op {req['op']!r}")
 
 

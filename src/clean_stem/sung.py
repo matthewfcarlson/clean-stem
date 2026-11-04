@@ -205,6 +205,15 @@ class SungFill:
         word_start = clip_start + reply.get("start", (start - clip_start) * sample_rate) / sample_rate
         return SungVocal(clip_start, np.load(tmp / "out.npy"), word, word_start)
 
+    def score(self, ref_id: str, clips: list[np.ndarray]) -> list[dict]:
+        """For the bench: speaker similarity to the reference and SQUIM
+        quality estimates for each mono clip (at SAMPLE_RATE)."""
+        paths = []
+        for k, clip in enumerate(clips):
+            paths.append(str(Path(self._tmp.name) / f"score{k}.npy"))
+            np.save(paths[-1], clip.astype(np.float32))
+        return self._ask({"op": "score", "ref": ref_id, "paths": paths})["scores"]
+
     def close(self) -> None:
         if self._proc is not None:
             self._proc.stdin.close()

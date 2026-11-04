@@ -5,6 +5,7 @@ from __future__ import annotations
 import argparse
 import json
 import sys
+import time
 from collections import Counter
 from pathlib import Path
 
@@ -144,7 +145,6 @@ def open_state(args: argparse.Namespace):
 
 def cmd_clean(args: argparse.Namespace) -> int:
     """Censor files in place, keeping the originals in .dirtystem sidecars."""
-    import time
 
     from clean_stem.batch import is_unchanged, iter_audio_files
     from clean_stem.pipeline import Models, clean
@@ -213,6 +213,35 @@ def cmd_reverse(args: argparse.Namespace) -> int:
     return 1 if failed else 0
 
 
+def cmd_bench(args: argparse.Namespace) -> int:
+    """Test bench for the sung fill (see clean_stem.bench)."""
+    from clean_stem import bench
+    from clean_stem.pipeline import Models
+
+    corpus = args.dir or bench.bench_dir()
+    if args.action == "compare":
+        a, b = (json.loads((corpus / "results" / label / "results.json").read_text()) for label in args.names)
+        print("\n".join(bench.compare(a, b)))
+        print(f"{args.names[0]}: {bench.summary(a)}")
+        print(f"{args.names[1]}: {bench.summary(b)}")
+        return 0
+    models = Models(state=open_state(args), fill="sung", seedvc_dir=args.seedvc)
+    if args.action == "corpus":
+        songs = [Path(s) for s in args.names] or sorted(p for p in Path("samples").iterdir() if p.suffix in (".mp3", ".flac") and p.stem != "blame-game")
+        cases = bench.build_corpus(songs, corpus, models)
+        print(f"{len(cases)} cases in {corpus}")
+        return 0
+    label = args.label or time.strftime("%Y%m%d-%H%M%S")
+    print(bench.HEADER)
+    try:
+        results = bench.run(label, corpus, models, args.names or None)
+    finally:
+        models.sung.close()
+    print(bench.summary(results))
+    print(f"clips and results.json in {corpus / 'results' / label}")
+    return 0
+
+
 LYRICS_HELP = "auto: synced lyrics if available; plain: ignore line timings; none: transcription only"
 
 
@@ -250,7 +279,14 @@ def main(argv: list[str] | None = None) -> int:
     rev = sub.add_parser("reverse", help="Restore originals from .dirtystem sidecars")
     rev.add_argument("files", nargs="+", type=Path)
     rev.add_argument("--force", action="store_true", help="Restore even if the file changed since cleaning")
-    for p in (align, clean, rev):
+    bench = sub.add_parser("bench", help="Test bench for the sung fill (development)")
+    bench.add_argument("action", choices=("corpus", "run", "compare"))
+    bench.add_argument("names", nargs="*", help="corpus: songs (default: samples/); run: case name prefixes; compare: two labels")
+    bench.add_argument("--label", help="run: name for this run's results (default: a timestamp)")
+    bench.add_argument("--dir", type=Path, default=None, help="Bench directory (default: $CLEAN_STEM_BENCH or ~/.cache/clean-stem/bench)")
+    bench.add_argument("--seedvc", type=Path, default=None, help="Seed-VC checkout (default: $CLEAN_STEM_SEEDVC)")
+    bench.set_defaults(func=cmd_bench)
+    for p in (align, clean, rev, bench):
         p.add_argument("--state", type=Path, default=None, help="State database (default: $CLEAN_STEM_STATE or ~/.cache/clean-stem/state.db)")
         p.add_argument("--no-state", action="store_true", help="Don't read or record state, or cache lyrics")
     rev.set_defaults(func=cmd_reverse)
