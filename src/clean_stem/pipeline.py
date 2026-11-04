@@ -181,15 +181,20 @@ def sing_spans(located: Located, models: Models, sample_rate: int) -> tuple[list
         if ref_id is None:
             reference = build_reference(located.stems, [(v.start, v.end) for v in words], sample_rate)
             ref_id = models.sung.set_reference(reference)
+        # It may start a little early, but not so early it merges with a neighbour.
+        before = max((v.end for v in words if v.end <= w.start), default=0.0)
+        max_lead = w.start - before - 2 * CROSSFADE - 0.01
         try:
-            result = models.sung.convert(ref_id, _covering_stems(spans[i], located.stems), w.start, w.end, sub, sample_rate)
+            result = models.sung.convert(
+                ref_id, _covering_stems(spans[i], located.stems), w.start, w.end, sub, sample_rate, max_lead
+            )
         except SeedVCError as e:
             fills.append(f"reversed (conversion failed: {e})")
             continue
         if isinstance(result, str):
             fills.append(f"reversed ({result})")
             continue
-        spans[i] = Span(w.start, w.end, sung=result)
+        spans[i] = Span(min(w.start, result.word_start), w.end, sung=result)
         fills.append(f"sung:{sub}")
     return spans, fills
 

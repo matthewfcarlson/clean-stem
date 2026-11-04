@@ -70,6 +70,12 @@ def substitute(word: str) -> str | None:
     if w.endswith("'s") and w[:-2] in SUBSTITUTES:
         w, suffix = w[:-2], "'s"
     sub = SUBSTITUTES.get(w)
+    if sub is None:
+        # A compound ending in a swear: "famefucker" -> "fame sucker".
+        for swear in sorted(SUBSTITUTES, key=len, reverse=True):
+            if w.endswith(swear) and len(w) - len(swear) >= 3 and w[: -len(swear)].isalpha():
+                sub = f"{w[: -len(swear)]} {SUBSTITUTES[swear]}"
+                break
     return sub + suffix if sub else None
 
 
@@ -98,11 +104,14 @@ def build_reference(stems: list[Stems], swears: list[tuple[float, float]], sampl
 @dataclass(frozen=True)
 class SungVocal:
     """A converted vocal: `audio` (mono, at the stems' rate) starts at `start`
-    seconds into the song and covers its swear plus CONTEXT either side."""
+    seconds into the song and covers its swear plus CONTEXT either side. The
+    new word itself starts at `word_start`, which may be a little before the
+    swear did."""
 
     start: float
     audio: np.ndarray
     word: str
+    word_start: float
 
 
 class SeedVCError(RuntimeError):
@@ -166,9 +175,12 @@ class SungFill:
         self._ask({"op": "reference", "id": ref_id, "path": str(path)})
         return ref_id
 
-    def convert(self, ref_id: str, stems: Stems, start: float, end: float, word: str, sample_rate: int) -> SungVocal | str:
+    def convert(
+        self, ref_id: str, stems: Stems, start: float, end: float, word: str, sample_rate: int, max_lead: float = 0.0
+    ) -> SungVocal | str:
         """Sing `word` over the swear at [start, end] (song seconds) in the
-        stems' window. Returns the converted vocal, or why it wasn't."""
+        stems' window, starting up to `max_lead` seconds early if there's a
+        gap there. Returns the converted vocal, or why it wasn't."""
         clip_start = max(stems.start, start - CONTEXT)
         clip_end = min(stems.end, end + CONTEXT)
         lo = int(round((clip_start - stems.start) * sample_rate))
@@ -183,13 +195,15 @@ class SungFill:
                 "path": str(tmp / "clip.npy"),
                 "start": int(round((start - clip_start) * sample_rate)),
                 "end": int(round((end - clip_start) * sample_rate)),
+                "max_lead": int(max(0.0, min(max_lead, start - clip_start)) * sample_rate),
                 "word": word,
                 "out": str(tmp / "out.npy"),
             }
         )
         if not reply.get("sung"):
             return reply.get("reason", "not sung")
-        return SungVocal(clip_start, np.load(tmp / "out.npy"), word)
+        word_start = clip_start + reply.get("start", (start - clip_start) * sample_rate) / sample_rate
+        return SungVocal(clip_start, np.load(tmp / "out.npy"), word, word_start)
 
     def close(self) -> None:
         if self._proc is not None:

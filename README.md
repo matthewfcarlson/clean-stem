@@ -47,7 +47,7 @@ export CLEAN_STEM_SEEDVC=~/.cache/clean-stem/seed-vc
 uv run clean-stem clean --fill sung path/to/music
 ```
 
-It costs roughly 15-25 s per sung word on CPU (`CLEAN_STEM_SUNG_STEPS`, default 30 diffusion steps; 15 is about twice as fast).
+It costs roughly 15-20 s per sung word on CPU (`CLEAN_STEM_SUNG_STEPS` sets the diffusion steps, default 15; 30 is about twice as slow and sounded the same).
 
 M4A files are re-encoded as AAC (libfdk_aac if ffmpeg has it, otherwise ffmpeg's `aac`) or ALAC to match the original. The original's `iTunSMPB` gapless tag is rewritten for the new encode's priming and padding: ffmpeg trusts it over the edit list, so the old one would shift the audio. `.mp4` (usually video), `.m4p` (DRM) and raw `.aac` are not touched.
 

@@ -23,6 +23,8 @@ def test_substitute():
     assert substitute("goddamn") == "god dang"
     assert substitute("nigga") is None  # slurs keep the default fill
     assert substitute("bitchy") is None
+    assert substitute("famefucker") == "fame sucker"  # compounds
+    assert substitute("abitch") is None  # too short a prefix to be a word
 
 
 def test_build_reference_skips_swears_and_silence():
@@ -45,14 +47,14 @@ def test_replace_spans_uses_sung_vocal():
     audio = np.ones((2, 10 * RATE), dtype=np.float32)
     window = Stems(2.0, 8.0, vocals=np.full((2, 6 * RATE), 0.75, np.float32),
                    instrumental=np.full((2, 6 * RATE), 0.25, np.float32))
-    vocal = SungVocal(3.5, np.full(2 * RATE, 0.5, np.float32), "sucker")
+    vocal = SungVocal(3.5, np.full(2 * RATE, 0.5, np.float32), "sucker", 4.0)
     out = replace_spans(audio, RATE, [Span(4.0, 5.0, sung=vocal)], [window], RATE)
     assert np.allclose(out[:, 4 * RATE : 5 * RATE], 0.75)  # instrumental + sung vocal
     assert np.all(out[:, : int(3.9 * RATE)] == 1.0) and np.all(out[:, int(5.1 * RATE) :] == 1.0)
 
 
 def test_merged_spans_lose_sung_vocal():
-    vocal = SungVocal(0.0, np.zeros(10), "sucker")
+    vocal = SungVocal(0.0, np.zeros(10), "sucker", 1.0)
     merged = merge_spans([Span(1.0, 2.0, sung=vocal), Span(1.5, 3.0)])
     assert merged == [Span(1.0, 3.0)] and merged[0].sung is None
 
@@ -62,17 +64,20 @@ class FakeSung:
         self.replies = replies
         self.references = 0
         self.asked = []
+        self.leads = []
 
     def set_reference(self, audio):
         self.references += 1
         return "ref"
 
-    def convert(self, ref_id, stems, start, end, word, sample_rate):
+    def convert(self, ref_id, stems, start, end, word, sample_rate, max_lead=0.0):
         self.asked.append(word)
+        self.leads.append(round(max_lead, 3))
         reply = self.replies[word]
         if isinstance(reply, Exception):
             raise reply
-        return reply if isinstance(reply, str) else SungVocal(start - 0.5, np.zeros(10, np.float32), word)
+        # Start the new word as early as allowed.
+        return reply if isinstance(reply, str) else SungVocal(start - 0.5, np.zeros(10, np.float32), word, start - max_lead)
 
 
 def located(words):
@@ -104,6 +109,16 @@ def test_sing_spans_falls_back_per_word():
     assert spans[0].sung is not None and all(s.sung is None for s in spans[1:])
     assert models.sung.references == 1
     assert models.sung.asked == ["sucker", "dang", "shoot"]
+    # Each may start early, but stays clear of the word before (merge gap 0.06 + 0.01).
+    assert models.sung.leads == [0.43, 0.43, 0.53]
+    assert spans[0].start == pytest.approx(0.07)
+
+
+def test_sing_spans_marks_compounds_with_lead():
+    models = Models()
+    models.sung = FakeSung({"fame sucker": True})
+    spans, fills = sing_spans(located([("famefucker", 2.0, 2.6)]), models, sung.SAMPLE_RATE)
+    assert fills == ["sung:fame sucker"] and spans[0].end == 2.6
 
 
 def test_sing_spans_needs_44k_stems():
