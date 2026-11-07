@@ -255,34 +255,50 @@ def save_mp3(path: Path, mono: np.ndarray) -> None:
     subprocess.run(cmd, input=pcm, check=True)
 
 
-def run(label: str, corpus: Path, models, only: list[str] | None = None, log=print) -> dict:
-    from clean_stem.sung import SungVocal
+def run(label: str, corpus: Path, models, only: list[str] | None = None, log=print, jobs: int = 1) -> dict:
+    """Sing and score every case, `jobs` at a time (each with its own
+    Seed-VC worker and a share of the CPU)."""
+    import threading
+    from concurrent.futures import ThreadPoolExecutor
+    from queue import Queue
+
+    from clean_stem.separate import Stems
+    from clean_stem.sung import SungFill, SungVocal
 
     cases = [c for c in load_cases(corpus) if not only or any(c.name.startswith(o) for o in only)]
     out = corpus / "results" / label
     out.mkdir(parents=True, exist_ok=True)
-    sung, transcriber = models.sung, models.transcriber
-    refs: dict[str, str] = {}
-    results = {}
-    for case in cases:
-        data = dict(np.load(corpus / f"{case.name}.npz"))
-        if case.song not in refs:
-            refs[case.song] = sung.set_reference(np.load(corpus / f"{case.song}-ref.npy"))
-        from clean_stem.separate import Stems
+    transcriber, listening = models.transcriber, threading.Lock()
+    if jobs == 1:
+        fills = [models.sung]
+    else:
+        threads = max(1, (os.cpu_count() or 1) // jobs)
+        fills = [SungFill(models.sung.seedvc_dir, models.sung.python, threads) for _ in range(jobs)]
+    idle: Queue = Queue()
+    for fill in fills:
+        idle.put((fill, {}))  # each worker keeps its own song references
 
-        length = data["vocals"].shape[1] / SR
-        stems = Stems(0.0, length, data["vocals"], data["instrumental"])
-        reply = sung.convert(refs[case.song], stems, case.start, case.end, case.substitute, SR, case.max_lead)
-        vocal = reply if isinstance(reply, SungVocal) else None
-        clips = render(case, data, vocal)
-        for name, clip in clips.items():
-            save_mp3(out / f"{case.name}-{name}.mp3", clip["mix"])
-        result = {"word": case.word, "substitute": case.substitute}
-        if vocal is None:
-            result["skipped"] = reply
-        else:
+    def one(case: Case) -> dict:
+        sung, refs = idle.get()
+        try:
+            data = dict(np.load(corpus / f"{case.name}.npz"))
+            if case.song not in refs:
+                refs[case.song] = sung.set_reference(np.load(corpus / f"{case.song}-ref.npy"))
+            length = data["vocals"].shape[1] / SR
+            stems = Stems(0.0, length, data["vocals"], data["instrumental"])
+            reply = sung.convert(refs[case.song], stems, case.start, case.end, case.substitute, SR, case.max_lead)
+            vocal = reply if isinstance(reply, SungVocal) else None
+            clips = render(case, data, vocal)
+            for name, clip in clips.items():
+                save_mp3(out / f"{case.name}-{name}.mp3", clip["mix"])
+            result = {"word": case.word, "substitute": case.substitute}
+            if vocal is None:
+                result["skipped"] = reply
+                return result
             i, j = int(case.start * SR), int(case.end * SR)
-            result.update(heard_metrics(heard_at(transcriber, clips["sung"]["mix"], case.start, case.end), case.substitute))
+            with listening:
+                heard = heard_at(transcriber, clips["sung"]["mix"], case.start, case.end)
+            result.update(heard_metrics(heard, case.substitute))
             result.update(signal_metrics(case, clips["original"], clips["sung"], vocal.word_start))
             pad = int(0.1 * SR)
             new, old = sung.score(refs[case.song], [clips["sung"]["vocals"][i - pad : j + pad], clips["original"]["vocals"][i - pad : j + pad]])
@@ -291,8 +307,20 @@ def run(label: str, corpus: Path, models, only: list[str] | None = None, log=pri
                 "pesq": round(new["pesq"], 2), "pesq_orig": round(old["pesq"], 2),
             })
             result["pass"] = passes(result)
-        results[case.name] = result
-        log(format_row(case.name, result))
+            return result
+        finally:
+            idle.put((sung, refs))
+
+    results = {}
+    try:
+        with ThreadPoolExecutor(jobs) as pool:
+            for case, result in zip(cases, pool.map(one, cases)):
+                results[case.name] = result
+                log(format_row(case.name, result))
+    finally:
+        if jobs > 1:
+            for fill in fills:
+                fill.close()
     (out / "results.json").write_text(json.dumps(results, indent=2))
     return results
 

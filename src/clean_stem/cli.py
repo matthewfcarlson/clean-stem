@@ -234,7 +234,7 @@ def cmd_bench(args: argparse.Namespace) -> int:
     label = args.label or time.strftime("%Y%m%d-%H%M%S")
     print(bench.HEADER)
     try:
-        results = bench.run(label, corpus, models, args.names or None)
+        results = bench.run(label, corpus, models, args.names or None, jobs=args.jobs)
     finally:
         models.sung.close()
     print(bench.summary(results))
@@ -283,6 +283,7 @@ def main(argv: list[str] | None = None) -> int:
     bench.add_argument("action", choices=("corpus", "run", "compare"))
     bench.add_argument("names", nargs="*", help="corpus: songs (default: samples/); run: case name prefixes; compare: two labels")
     bench.add_argument("--label", help="run: name for this run's results (default: a timestamp)")
+    bench.add_argument("--jobs", type=int, default=1, help="run: cases to sing at once, each with its own Seed-VC worker (default: 1)")
     bench.add_argument("--dir", type=Path, default=None, help="Bench directory (default: $CLEAN_STEM_BENCH or ~/.cache/clean-stem/bench)")
     bench.add_argument("--seedvc", type=Path, default=None, help="Seed-VC checkout (default: $CLEAN_STEM_SEEDVC)")
     bench.set_defaults(func=cmd_bench)

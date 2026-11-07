@@ -128,10 +128,12 @@ class SungFill:
 
     `seedvc_dir` is the Seed-VC checkout; its Python is `python` or else
     `$CLEAN_STEM_SEEDVC_PYTHON` or else `<seedvc_dir>/.venv/bin/python`.
+    `threads` caps the worker's CPU threads, for running several at once.
     """
 
-    def __init__(self, seedvc_dir: Path, python: Path | None = None):
+    def __init__(self, seedvc_dir: Path, python: Path | None = None, threads: int | None = None):
         self.seedvc_dir = seedvc_dir
+        self.threads = threads
         env_python = os.environ.get("CLEAN_STEM_SEEDVC_PYTHON")
         self.python = python or (Path(env_python) if env_python else seedvc_dir / ".venv" / "bin" / "python")
         if not (seedvc_dir / "inference.py").exists():
@@ -144,6 +146,7 @@ class SungFill:
 
     def _ask(self, request: dict) -> dict:
         if self._proc is None:
+            env = {**os.environ, "OMP_NUM_THREADS": str(self.threads)} if self.threads else None
             self._proc = subprocess.Popen(
                 [str(self.python), str(WORKER)],
                 cwd=self.seedvc_dir,
@@ -151,6 +154,7 @@ class SungFill:
                 stdout=subprocess.PIPE,
                 stderr=subprocess.DEVNULL if not os.environ.get("CLEAN_STEM_DEBUG") else None,
                 text=True,
+                env=env,
             )
             self._read()  # {"ready": true} once the models are loaded
         self._proc.stdin.write(json.dumps(request) + "\n")

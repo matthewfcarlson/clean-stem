@@ -51,6 +51,8 @@ It costs roughly 15-20 s per sung word on CPU (`CLEAN_STEM_SUNG_STEPS` sets the 
 
 `clean-stem bench` is a test bench for the sung fill. `bench corpus` cuts every swear with a substitute out of the sample songs (once, into `~/.cache/clean-stem/bench`, outside the repo); `bench run --label NAME` sings each one, saves original / reversed / sung clips to listen to, and scores them: what Whisper hears (the substitute, never a swear), how late the new vowel lands, dips between consonant and vowel, loudness, clicks at the edges, similarity to the artist's voice and an estimated quality score. `bench compare A B` shows what changed between two runs.
 
+`bench run --jobs N` sings N cases at once, each in its own Seed-VC worker. To run on a faster machine, set `CLEAN_STEM_REMOTE=user@host` and use `scripts/remote.sh` in place of `clean-stem` (e.g. `scripts/remote.sh bench run --jobs 8 --label try1`). It syncs this working tree there, runs the command and copies the bench results back. The remote needs `uv`, ffmpeg and `scripts/setup_seedvc.sh`.
+
 M4A files are re-encoded as AAC (libfdk_aac if ffmpeg has it, otherwise ffmpeg's `aac`) or ALAC to match the original. The original's `iTunSMPB` gapless tag is rewritten for the new encode's priming and padding: ffmpeg trusts it over the edit list, so the old one would shift the audio. `.mp4` (usually video), `.m4p` (DRM) and raw `.aac` are not touched.
 
 `clean` keeps a SQLite state file (`~/.cache/clean-stem/state.db`, or `--state` / `$CLEAN_STEM_STATE`) with every file's size, mtime and outcome, plus cached lyrics lookups. Re-running over a library only touches new or changed files; lookups that failed (site down, rate-limited) are retried next run, and files restored with `reverse` are left alone.
