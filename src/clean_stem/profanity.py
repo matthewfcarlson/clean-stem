@@ -34,15 +34,18 @@ WHOLE_WORDS = (
     "faggot",
 )
 WHOLE_WORD_SUFFIXES = ("", "s", "es", "ed", "in", "ing", "in'")
+# Suffixed forms that are everyday words ("cocked your head to the side").
+INNOCENT = {"cocked"}
 
 # Bump when the list changes, so batch runs re-check files.
 # 2: dropped "ass", "dick", "hoe" as too tame / too often misheard ("whole" -> "hoe").
-WORD_LIST_VERSION = "2"
+# 3: "cocked" is innocent.
+WORD_LIST_VERSION = "3"
 
 # Asterisks are part of words so censored lyrics ("f**k", "sh*t") stay whole.
 _WORD_RE = re.compile(r"[A-Za-z][A-Za-z'’*]*")
 _CENSORED_RE = re.compile(r"^[a-z]+\*+[a-z*]*$")
-_WHOLE = {w + s for w in WHOLE_WORDS for s in WHOLE_WORD_SUFFIXES}
+_WHOLE = {w + s for w in WHOLE_WORDS for s in WHOLE_WORD_SUFFIXES} - INNOCENT
 
 
 @dataclass(frozen=True)

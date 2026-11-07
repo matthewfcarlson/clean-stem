@@ -14,7 +14,7 @@ def test_flags_profanity(word):
 
 @pytest.mark.parametrize(
     "word",
-    ["hell", "class", "assume", "Dickens", "cocktail", "pissed", "Scunthorpe", "hoedown", "shoe", "ass", "dick", "hoes"],
+    ["hell", "class", "assume", "Dickens", "cocktail", "pissed", "Scunthorpe", "hoedown", "shoe", "ass", "dick", "hoes", "cocked"],
 )
 def test_ignores_innocent_words(word):
     assert not is_profane(word)
