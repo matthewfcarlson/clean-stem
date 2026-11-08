@@ -1,9 +1,15 @@
+import pytest
+
 from clean_stem.lookup import (
+    FetchedLyrics,
+    LookupFailed,
     TrackInfo,
     clean_title,
+    lookup_lyrics,
     lyrics_similarity,
     parse_lrc,
     pick_lrclib_candidate,
+    pick_lrclib_instrumental,
     strip_section_headers,
 )
 
@@ -45,6 +51,22 @@ def test_rejects_instrumental_missing_lyrics_and_unknown_duration():
     assert pick_lrclib_candidate(candidates, TRACK) is None
 
 
+def test_picks_instrumental_only_within_duration():
+    assert pick_lrclib_instrumental([candidate(1, 158.0)], TRACK) is None
+    candidates = [candidate(1, 170.0, instrumental=True), candidate(2, 157.0, instrumental=True), candidate(3, 158.5, instrumental=True)]
+    assert pick_lrclib_instrumental(candidates, TRACK)["id"] == 3
+
+
+def test_lrclib_reports_instrumental_as_empty_lyrics(monkeypatch):
+    from clean_stem import lookup
+
+    monkeypatch.setattr(lookup, "_get_json", lambda url: [candidate(7, 158.0, plain=None, instrumental=True)])
+    fetched = lookup.LrclibProvider().fetch(TRACK)
+    assert fetched.text == "" and fetched.source == "lrclib:7 (instrumental)"
+    monkeypatch.setattr(lookup, "_get_json", lambda url: [candidate(7, 158.0), candidate(8, 158.0, plain=None, instrumental=True)])
+    assert lookup.LrclibProvider().fetch(TRACK).source == "lrclib:7"  # lyrics win
+
+
 def test_clean_title_strips_explicit_marker():
     assert clean_title("vampire (Explicit)") == "vampire"
     assert clean_title("Song [Remastered 2011]") == "Song"
@@ -67,3 +89,21 @@ def test_strip_section_headers():
 def test_lyrics_similarity_ignores_case_and_punctuation():
     assert lyrics_similarity("Hate to give, the SATISFACTION", "hate to give the satisfaction") == 1.0
     assert lyrics_similarity("completely different words", "hate to give the satisfaction") < 0.2
+
+
+def test_lookup_prefers_lyrics_over_an_instrumental_marker():
+    class Fixed:
+        def __init__(self, result):
+            self.result = result
+
+        def fetch(self, track):
+            if isinstance(self.result, Exception):
+                raise self.result
+            return self.result
+
+    marked = FetchedLyrics("", "lrclib:7 (instrumental)")
+    lyrics = FetchedLyrics("Steady as the beating drum", "lyrics.ovh")
+    assert lookup_lyrics(TRACK, (Fixed(marked), Fixed(lyrics))) is lyrics
+    assert lookup_lyrics(TRACK, (Fixed(marked), Fixed(None))) is marked
+    with pytest.raises(LookupFailed):  # the other site might have lyrics
+        lookup_lyrics(TRACK, (Fixed(marked), Fixed(LookupFailed("503"))))

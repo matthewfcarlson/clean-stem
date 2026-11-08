@@ -20,6 +20,8 @@ TIMEOUT = 15
 MAX_DURATION_DELTA = 4.0
 # Waits (seconds) before retrying a rate-limited or failing request.
 RETRY_DELAYS = (2, 8, 30)
+# Ends the source of a result LRCLIB marks instrumental (no lyrics text).
+INSTRUMENTAL_SUFFIX = " (instrumental)"
 
 _TITLE_NOISE_RE = re.compile(r"\s*[\(\[](explicit|clean|remaster(ed)?[^)\]]*)[\)\]]\s*", re.I)
 _SECTION_HEADER_RE = re.compile(r"^\s*\[[^\]]*\]\s*$")
@@ -127,7 +129,11 @@ class LrclibProvider:
         candidates = _get_json(f"{self.base_url}/search?{urllib.parse.urlencode(params)}") or []
         best = pick_lrclib_candidate(candidates, track)
         if best is None:
-            return None
+            # Marked instrumental: no lyrics, but a hint for the caller.
+            instrumental = pick_lrclib_instrumental(candidates, track)
+            if instrumental is None:
+                return None
+            return FetchedLyrics(text="", source=f"{self.name}:{instrumental['id']}{INSTRUMENTAL_SUFFIX}", duration=instrumental["duration"])
         return FetchedLyrics(
             text=best["plainLyrics"],
             source=f"{self.name}:{best['id']}",
@@ -163,6 +169,16 @@ def pick_lrclib_candidate(candidates: list[dict], track: TrackInfo) -> dict | No
     return max(viable, key=score, default=None)
 
 
+def pick_lrclib_instrumental(candidates: list[dict], track: TrackInfo) -> dict | None:
+    """A search result marked instrumental with a duration close to the file's."""
+    viable = [
+        c
+        for c in candidates
+        if c.get("instrumental") and c.get("duration") is not None and abs(c["duration"] - track.duration) <= MAX_DURATION_DELTA
+    ]
+    return min(viable, key=lambda c: abs(c["duration"] - track.duration), default=None)
+
+
 class LyricsOvhProvider:
     """https://lyrics.ovh - keyless, plain text only, no duration to match on."""
 
@@ -183,21 +199,25 @@ DEFAULT_PROVIDERS = (LrclibProvider(), LyricsOvhProvider())
 def lookup_lyrics(track: TrackInfo, providers=DEFAULT_PROVIDERS) -> FetchedLyrics | None:
     """Return lyrics from the first provider that has them.
 
+    A result marked instrumental is returned only if no provider has lyrics.
     Returns None only if every provider answered "not found"; if any of them
     failed and none had lyrics, raises LookupFailed so the caller can retry.
     """
     failure: LookupFailed | None = None
+    instrumental = None
     for provider in providers:
         try:
             result = provider.fetch(track)
         except LookupFailed as e:
             failure = e
             continue
-        if result is not None:
+        if result is not None and result.source.endswith(INSTRUMENTAL_SUFFIX):
+            instrumental = instrumental or result
+        elif result is not None:
             return result
     if failure is not None:
         raise failure
-    return None
+    return instrumental
 
 
 class CachedProvider:

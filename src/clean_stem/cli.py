@@ -143,6 +143,10 @@ def open_state(args: argparse.Namespace):
     return None if args.no_state else StateDB(args.state)
 
 
+# Seconds to wait before retrying files whose lyrics lookup failed.
+RETRY_PASS_DELAY = 60
+
+
 def cmd_clean(args: argparse.Namespace) -> int:
     """Censor files in place, keeping the originals in .dirtystem sidecars."""
 
@@ -162,26 +166,46 @@ def cmd_clean(args: argparse.Namespace) -> int:
     files = list(iter_audio_files(args.files))
     results = []
     counts: Counter = Counter()
-    for n, path in enumerate(files, start=1):
-        if state and not args.force and is_unchanged(state, path):
-            counts["unchanged"] += 1
-            continue
-        started = time.monotonic()
-        try:
-            result = clean(path, models, args.lyrics)
-        except Exception as e:  # keep going through a big library
-            result = {"file": str(path), "status": "error", "reason": f"{type(e).__name__}: {e}"}
-        if state:
-            state.put_file(path, result["status"], result.get("reason"), WORD_LIST_VERSION)
-        counts[result["status"]] += 1
-        results.append(result)
+
+    def run(files: list[Path], label: str = "") -> list[Path]:
+        """Clean `files`; returns those whose lyrics lookup failed."""
+        failed = []
+        for n, path in enumerate(files, start=1):
+            if state and not args.force and is_unchanged(state, path):
+                counts["unchanged"] += 1
+                continue
+            started = time.monotonic()
+            try:
+                result = clean(path, models, args.lyrics)
+            except Exception as e:  # keep going through a big library
+                result = {"file": str(path), "status": "error", "reason": f"{type(e).__name__}: {e}"}
+            if result["status"] == "error" and result["reason"].startswith("lyrics lookup failed"):
+                failed.append(path)
+            if state:
+                state.put_file(path, result["status"], result.get("reason"), WORD_LIST_VERSION)
+            counts[result["status"]] += 1
+            results.append(result)
+            if not args.json:
+                detail = result.get("reason") or result.get("lyrics_source", "")
+                if result["status"] == "cleaned":
+                    sung = sum(r["fill"].startswith("sung:") for r in result["replacements"])
+                    detail = f"{len(result['replacements'])} words replaced{f', {sung} sung' if sung else ''}  [{detail}]"
+                elapsed = time.monotonic() - started
+                print(f"[{label}{n}/{len(files)}] {result['status'].upper():8} {path}  {detail}  ({elapsed:.0f}s)", flush=True)
+        return failed
+
+    retry = run(files)
+    if retry:
+        # Lyrics sites have outages that outlast a file's own retries; give
+        # them a minute and try those files once more.
         if not args.json:
-            detail = result.get("reason") or result.get("lyrics_source", "")
-            if result["status"] == "cleaned":
-                sung = sum(r["fill"].startswith("sung:") for r in result["replacements"])
-                detail = f"{len(result['replacements'])} words replaced{f', {sung} sung' if sung else ''}  [{detail}]"
-            elapsed = time.monotonic() - started
-            print(f"[{n}/{len(files)}] {result['status'].upper():8} {path}  {detail}  ({elapsed:.0f}s)", flush=True)
+            print(f"retrying {len(retry)} files whose lyrics lookup failed, in {RETRY_PASS_DELAY}s", flush=True)
+        time.sleep(RETRY_PASS_DELAY)
+        counts["error"] -= len(retry)
+        counts += Counter()  # drop a zero error count
+        retried = {str(p) for p in retry}
+        results[:] = [r for r in results if r["file"] not in retried]
+        run(retry, label="retry ")
     if args.fill == "sung":
         models.sung.close()
     if args.json:

@@ -10,6 +10,7 @@ from pathlib import Path
 
 from clean_stem import align, sidecar
 from clean_stem.lookup import (
+    INSTRUMENTAL_SUFFIX,
     CachedProvider,
     LookupFailed,
     LrclibProvider,
@@ -133,21 +134,32 @@ def locate(path: Path, models: Models, lyrics_mode: str = "auto") -> Located | s
 
     # No line timings. Use plain lyrics if we can find them.
     lyrics_text = lyrics_source = None
+    instrumental = False  # a lyrics site says so; not trusted on its own
     if lyrics_mode != "none":
         if (embedded := read_embedded_lyrics(path)) is not None:
             lyrics_text, lyrics_source = embedded.text, embedded.source
         elif (plain := lookup_lyrics(track, (models.lrclib, models.ovh))) is not None:
-            lyrics_text, lyrics_source = plain.text, plain.source
+            if plain.source.endswith(INSTRUMENTAL_SUFFIX):
+                instrumental, lyrics_source = True, plain.source
+            else:
+                lyrics_text, lyrics_source = plain.text, plain.source
     if lyrics_text is not None and not find_profanity(lyrics_text):
         return Located(track, lyrics_source, [])
     audio = _AudioSetup(path, models)
     vocals, separator, stems = audio.vocals, audio.separator, audio.stems
     if lyrics_text is None:
-        # Cheap check before separating the whole song: a confident full-mix
-        # transcript with no profanity means the song is clean.
+        # Cheap check before separating the whole song: the song is clean if
+        # the full-mix transcript has no profanity and is confident, or is
+        # too sparse to be anything but an instrumental, or the lyrics site
+        # says it's instrumental (they're sometimes wrong, hence the listen).
         heard, confidence = models.transcriber.transcribe(audio.mix_audio)
-        if confidence >= scan.CONFIDENT_PROBABILITY and not any(is_profane(w.text) for w in heard):
-            return Located(track, "transcript", [])
+        if not any(is_profane(w.text) for w in heard):
+            if instrumental:
+                return Located(track, lyrics_source, [])
+            if confidence >= scan.CONFIDENT_PROBABILITY:
+                return Located(track, "transcript", [])
+            if len(heard) < scan.INSTRUMENTAL_WORDS_PER_MINUTE * track.duration / 60:
+                return Located(track, "transcript (instrumental)", [])
 
     vocals_transcript = vocals(0.0, track.duration)
     words = scan.locate_without_sync(lyrics_text, vocals_transcript, stems, separator.sample_rate, track.duration)

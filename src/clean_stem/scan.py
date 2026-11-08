@@ -31,6 +31,10 @@ SILENCE_DB = -40.0
 # Without lyrics, the full-mix pass decides whether separation is needed:
 # if it hears no profanity and is at least this confident, the song is clean.
 CONFIDENT_PROBABILITY = 0.6
+# Or if it hears fewer words a minute than this: an instrumental, where
+# Whisper only hallucinates a few ("Thanks for watching"). Songs with vocals
+# measured at 20+ words a minute in the full mix.
+INSTRUMENTAL_WORDS_PER_MINUTE = 10
 
 
 @dataclass(frozen=True)
