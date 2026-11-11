@@ -231,8 +231,41 @@ def sing_spans(located: Located, models: Models, sample_rate: int) -> tuple[list
     return spans, fills
 
 
-def clean(path: Path, models: Models, lyrics_mode: str = "auto") -> dict:
-    """Censor one file in place, writing a .dirtystem sidecar. Returns a result dict."""
+# How far a cleaned file's length may drift from the original's (seconds).
+MAX_LENGTH_DRIFT = 0.1
+
+
+def check_encoded(encoded: Path, seconds: float, sample_rate: int) -> None:
+    """Refuse to replace the original with a file that doesn't decode to the
+    original's length (`seconds`, as decoded at `sample_rate`)."""
+    import subprocess
+
+    from clean_stem.audio import decode_mono
+
+    try:
+        decoded = len(decode_mono(encoded, sample_rate)) / sample_rate
+    except subprocess.CalledProcessError as e:
+        raise sidecar.SidecarError(f"cleaned file doesn't decode: {e.stderr.decode(errors='replace').strip()[:200]}") from e
+    if abs(decoded - seconds) > MAX_LENGTH_DRIFT:
+        raise sidecar.SidecarError(f"cleaned file decodes to {decoded:.2f}s, the original {seconds:.2f}s")
+
+
+def back_up(path: Path, root: Path) -> Path:
+    """Copy `path` under `root` (mirroring its absolute path) and check the copy."""
+    dest = root / path.resolve().relative_to(path.resolve().anchor)
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    tmp = dest.with_name(dest.name + ".tmp")
+    shutil.copy2(path, tmp)
+    if sidecar.sha256(tmp) != sidecar.sha256(path):
+        tmp.unlink()
+        raise sidecar.SidecarError(f"backup of {path} doesn't match it")
+    os.replace(tmp, dest)
+    return dest
+
+
+def clean(path: Path, models: Models, lyrics_mode: str = "auto", backup: Path | None = None) -> dict:
+    """Censor one file in place, writing a .dirtystem sidecar (and, with
+    `backup`, a copy of the original under that directory). Returns a result dict."""
     from clean_stem.audio import decode_stereo
     from clean_stem.splice import OPUS_SAMPLE_RATE, REVERSED_VOCAL_GAIN, Span, encode_like, replace_spans
 
@@ -290,10 +323,15 @@ def clean(path: Path, models: Models, lyrics_mode: str = "auto") -> dict:
             ],
         }
         shutil.copymode(path, tmp)
+        check_encoded(tmp, audio.shape[1] / sample_rate, sample_rate)
+        if backup is not None:
+            back_up(path, backup)
         sidecar.write_sidecar(path, tmp, details)
         os.replace(tmp, path)
     finally:
         if tmp.exists():
             tmp.unlink()
+    if sidecar.sha256(path) != sidecar.read_manifest(path)["modified_sha256"]:
+        raise sidecar.SidecarError(f"{path} doesn't match its sidecar after replacing; restore with `clean-stem reverse --force`")
 
     return {**result, "status": "cleaned", "lyrics_source": located.lyrics_source, "replacements": details["replacements"]}

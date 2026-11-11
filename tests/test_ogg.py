@@ -121,3 +121,17 @@ def test_batch_finds_ogg_and_opus(tmp_path):
     for name in ("a.ogg", "b.opus", "c.OGG", "d.wav"):
         (tmp_path / name).write_bytes(b"")
     assert [p.name for p in iter_audio_files([tmp_path])] == ["a.ogg", "b.opus", "c.OGG"]
+
+
+def test_check_encoded_rejects_a_truncated_file(tmp_path):
+    from clean_stem.pipeline import check_encoded
+    from clean_stem.sidecar import SidecarError
+
+    original = make_song(tmp_path / "song.ogg", 44100, 2)
+    dest = tmp_path / "out.ogg"
+    audio = decode_stereo(original, 44100)
+    encode_like(original, audio, 44100, dest)
+    check_encoded(dest, audio.shape[1] / 44100, 44100)
+    dest.write_bytes(dest.read_bytes()[: dest.stat().st_size // 2])
+    with pytest.raises(SidecarError):
+        check_encoded(dest, audio.shape[1] / 44100, 44100)

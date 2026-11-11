@@ -49,3 +49,16 @@ def test_reverse_when_cleaning_was_interrupted(tmp_path):
     write_sidecar(song, other, {})  # crashed before replacing the file
     assert reverse(song) == "already original; removed sidecar"
     assert song.read_bytes() == b"original audio"
+
+
+def test_write_sidecar_refuses_one_that_does_not_read_back(tmp_path, monkeypatch):
+    from clean_stem import sidecar
+
+    song = tmp_path / "song.mp3"
+    song.write_bytes(b"original audio")
+    modified = tmp_path / "tmp.mp3"
+    modified.write_bytes(b"cleaned audio")
+    monkeypatch.setattr(sidecar, "stored_sha256", lambda side, suffix: "0" * 64)
+    with pytest.raises(sidecar.SidecarError, match="read back"):
+        write_sidecar(song, modified, {})
+    assert sorted(tmp_path.iterdir()) == sorted([song, modified])  # no sidecar, no temp file

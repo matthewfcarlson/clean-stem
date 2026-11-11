@@ -47,12 +47,35 @@ def write_sidecar(original: Path, modified: Path, details: dict) -> Path:
     }
     dest = sidecar_path(original)
     tmp = dest.with_name(dest.name + ".tmp")
-    with zipfile.ZipFile(tmp, "w") as zf:
-        zf.writestr("manifest.json", json.dumps(manifest, indent=2), compress_type=zipfile.ZIP_DEFLATED)
-        # Audio doesn't compress; store it as-is.
-        zf.write(original, "original" + original.suffix.lower(), compress_type=zipfile.ZIP_STORED)
+    try:
+        with tmp.open("wb") as f:
+            with zipfile.ZipFile(f, "w") as zf:
+                zf.writestr("manifest.json", json.dumps(manifest, indent=2), compress_type=zipfile.ZIP_DEFLATED)
+                # Audio doesn't compress; store it as-is.
+                zf.write(original, "original" + original.suffix.lower(), compress_type=zipfile.ZIP_STORED)
+            f.flush()
+            os.fsync(f.fileno())
+        # Read it back before anyone relies on it: the original is about to go.
+        if stored_sha256(tmp, original.suffix) != manifest["original_sha256"]:
+            raise SidecarError(f"{tmp} doesn't read back as the original")
+    except BaseException:
+        tmp.unlink(missing_ok=True)
+        raise
     os.replace(tmp, dest)
     return dest
+
+
+def stored_sha256(side: Path, suffix: str) -> str:
+    """Hash of the original stored in a sidecar (zip CRCs checked on the way)."""
+    h = hashlib.sha256()
+    with zipfile.ZipFile(side) as zf, zf.open("original" + suffix.lower()) as src:
+        for chunk in iter(lambda: src.read(1 << 20), b""):
+            h.update(chunk)
+    return h.hexdigest()
+
+
+class SidecarError(Exception):
+    pass
 
 
 def read_manifest(path: Path) -> dict:

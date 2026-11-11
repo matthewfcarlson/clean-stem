@@ -176,7 +176,7 @@ def cmd_clean(args: argparse.Namespace) -> int:
                 continue
             started = time.monotonic()
             try:
-                result = clean(path, models, args.lyrics)
+                result = clean(path, models, args.lyrics, backup=args.backup)
             except Exception as e:  # keep going through a big library
                 result = {"file": str(path), "status": "error", "reason": f"{type(e).__name__}: {e}"}
             if result["status"] == "error" and result["reason"].startswith("lyrics lookup failed"):
@@ -298,6 +298,7 @@ def main(argv: list[str] | None = None) -> int:
     clean.add_argument("--json", action="store_true", help="Output JSON")
     clean.add_argument("--fill", choices=FILLS, default="reversed", help="reversed: instrumental plus the word's vocal reversed; sung: sing a clean word in the artist's voice where the swear is sung (needs Seed-VC)")
     clean.add_argument("--seedvc", type=Path, default=None, help="Seed-VC checkout for --fill sung (default: $CLEAN_STEM_SEEDVC)")
+    clean.add_argument("--backup", type=Path, default=None, help="Also copy each original here (mirroring its path) before replacing it")
     clean.set_defaults(func=cmd_clean)
 
     rev = sub.add_parser("reverse", help="Restore originals from .dirtystem sidecars")
