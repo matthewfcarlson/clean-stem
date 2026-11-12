@@ -255,10 +255,17 @@ def back_up(path: Path, root: Path) -> Path:
     dest = root / path.resolve().relative_to(path.resolve().anchor)
     dest.parent.mkdir(parents=True, exist_ok=True)
     tmp = dest.with_name(dest.name + ".tmp")
-    shutil.copy2(path, tmp)
-    if sidecar.sha256(tmp) != sidecar.sha256(path):
-        tmp.unlink()
-        raise sidecar.SidecarError(f"backup of {path} doesn't match it")
+    # Not copy2: files on SMB shares can carry flags (e.g. "arch") that only root may set locally.
+    try:
+        shutil.copyfile(path, tmp)
+        shutil.copymode(path, tmp)
+        st = path.stat()
+        os.utime(tmp, ns=(st.st_atime_ns, st.st_mtime_ns))
+        if sidecar.sha256(tmp) != sidecar.sha256(path):
+            raise sidecar.SidecarError(f"backup of {path} doesn't match it")
+    except BaseException:
+        tmp.unlink(missing_ok=True)
+        raise
     os.replace(tmp, dest)
     return dest
 

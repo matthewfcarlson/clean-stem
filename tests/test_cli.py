@@ -28,3 +28,19 @@ def test_back_up_mirrors_the_path(tmp_path):
     dest = pipeline.back_up(song, tmp_path / "backup")
     assert dest.read_bytes() == b"original audio"
     assert str(dest).endswith(str(song.resolve()).lstrip("/"))
+    assert dest.stat().st_mtime_ns == song.stat().st_mtime_ns
+
+
+def test_back_up_leaves_no_temp_file_on_failure(tmp_path, monkeypatch):
+    song = tmp_path / "song.mp3"
+    song.write_bytes(b"original audio")
+
+    def refuse(src, dst):
+        raise PermissionError("flags")
+
+    monkeypatch.setattr(pipeline.shutil, "copymode", refuse)
+    try:
+        pipeline.back_up(song, tmp_path / "backup")
+    except PermissionError:
+        pass
+    assert not [p for p in (tmp_path / "backup").rglob("*") if p.is_file()]
