@@ -2,7 +2,15 @@ import os
 
 import pytest
 
-from clean_stem.sidecar import ReverseError, read_manifest, reverse, sidecar_path, write_sidecar
+from clean_stem.sidecar import (
+    ReverseError,
+    SidecarError,
+    read_manifest,
+    restore_in_place,
+    reverse,
+    sidecar_path,
+    write_sidecar,
+)
 
 
 @pytest.fixture
@@ -62,3 +70,18 @@ def test_write_sidecar_refuses_one_that_does_not_read_back(tmp_path, monkeypatch
     with pytest.raises(sidecar.SidecarError, match="read back"):
         write_sidecar(song, modified, {})
     assert sorted(tmp_path.iterdir()) == sorted([song, modified])  # no sidecar, no temp file
+
+
+def test_restore_in_place_writes_the_original_into_whatever_shows(cleaned):
+    cleaned.write_bytes(b"a stale copy from another disk")
+    restore_in_place(cleaned, (1_700_000_000_000_000_000, 1_600_000_000_000_000_000))
+    assert cleaned.read_bytes() == b"original audio"
+    assert cleaned.stat().st_mtime_ns == 1_600_000_000_000_000_000
+    assert not sidecar_path(cleaned).exists()
+
+
+def test_restore_in_place_keeps_the_sidecar_if_bytes_dont_match(cleaned, monkeypatch):
+    monkeypatch.setattr("clean_stem.sidecar.sha256", lambda path: "nope")
+    with pytest.raises(SidecarError, match="still in"):
+        restore_in_place(cleaned)
+    assert sidecar_path(cleaned).exists()

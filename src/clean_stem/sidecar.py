@@ -83,6 +83,28 @@ def read_manifest(path: Path) -> dict:
         return json.loads(zf.read("manifest.json"))
 
 
+def restore_in_place(path: Path, times_ns: tuple[int, int] | None = None) -> None:
+    """Write the sidecar's original back into `path` itself, without a rename, then drop the sidecar.
+
+    For when renaming over `path` failed and left some other copy showing (an Unraid share with a
+    stale copy of the file on a second disk does this). `times_ns` restores (atime, mtime). The
+    sidecar is kept if the written bytes don't hash back to the original.
+    """
+    side = sidecar_path(path)
+    with zipfile.ZipFile(side) as zf:
+        manifest = json.loads(zf.read("manifest.json"))
+        with zf.open("original" + path.suffix.lower()) as src, path.open("wb") as dst:
+            while chunk := src.read(1 << 20):
+                dst.write(chunk)
+            dst.flush()
+            os.fsync(dst.fileno())
+    if sha256(path) != manifest["original_sha256"]:
+        raise SidecarError(f"{path} doesn't match the original after restoring it in place; it is still in {side}")
+    if times_ns is not None:
+        os.utime(path, ns=times_ns)
+    side.unlink()
+
+
 class ReverseError(Exception):
     pass
 

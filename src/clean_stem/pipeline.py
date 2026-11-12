@@ -333,8 +333,18 @@ def clean(path: Path, models: Models, lyrics_mode: str = "auto", backup: Path | 
         check_encoded(tmp, audio.shape[1] / sample_rate, sample_rate)
         if backup is not None:
             back_up(path, backup)
+        st = path.stat()
         sidecar.write_sidecar(path, tmp, details)
-        os.replace(tmp, path)
+        try:
+            os.replace(tmp, path)
+        except OSError as e:
+            # On an Unraid share, a stale copy of the file on another disk makes the rename fail and
+            # then shows through in its place. Put the original back and leave the file uncleaned.
+            if not path.exists() or sidecar.sha256(path) != sidecar.read_manifest(path)["original_sha256"]:
+                sidecar.restore_in_place(path, (st.st_atime_ns, st.st_mtime_ns))
+                raise sidecar.SidecarError(f"couldn't replace the file ({e}) and another copy showed up; original restored in place") from e
+            sidecar.sidecar_path(path).unlink()
+            raise
     finally:
         if tmp.exists():
             tmp.unlink()
