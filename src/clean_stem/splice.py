@@ -163,7 +163,9 @@ def copy_tags(original: Path, dest: Path) -> None:
     from mutagen.mp4 import MP4, MP4FreeForm
 
     if original.suffix.lower() == ".mp3":
-        ID3(original).save(dest)
+        # Keep the original's ID3 version (mutagen writes 2.3 or 2.4, so 2.2 becomes 2.3).
+        tags = ID3(original)
+        tags.save(dest, v2_version=4 if tags.version >= (2, 4, 0) else 3)
         return
     elif original.suffix.lower() in (".ogg", ".opus"):
         _copy_vorbis_comments(original, dest)

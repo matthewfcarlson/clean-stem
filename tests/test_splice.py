@@ -1,7 +1,9 @@
 import numpy as np
+import pytest
+from mutagen.id3 import ID3, TIT2, TXXX
 
 from clean_stem.separate import Stems
-from clean_stem.splice import CROSSFADE, Span, merge_spans, replace_spans
+from clean_stem.splice import CROSSFADE, Span, copy_tags, merge_spans, replace_spans
 
 RATE = 1000  # low rate keeps the arithmetic readable
 
@@ -85,3 +87,18 @@ def test_replace_spans_mixes_in_reversed_vocal():
     assert 0.1 < inside.max() < 0.25  # at half level (vocal there is ~0.33-0.5)
     silent = replace_spans(audio, RATE, [Span(4.0, 5.0)], [window], RATE, reversed_vocal_gain=0.0)
     assert np.all(silent == 0.0)
+
+
+@pytest.mark.parametrize("version", [3, 4])
+def test_copy_tags_keeps_the_id3_version(tmp_path, version):
+    original, dest = tmp_path / "a.mp3", tmp_path / "b.mp3"
+    original.write_bytes(b"\xff\xfb\x90\x00" + bytes(413))  # one silent MPEG frame
+    dest.write_bytes(original.read_bytes())
+    tags = ID3()
+    tags.add(TIT2(encoding=3, text="Title"))
+    tags.add(TXXX(encoding=3, desc="BARCODE", text="123"))
+    tags.save(original, v2_version=version)
+    copy_tags(original, dest)
+    copied = ID3(dest)
+    assert copied.version == (2, version, 0)
+    assert copied["TIT2"].text == ["Title"] and copied["TXXX:BARCODE"].text == ["123"]
