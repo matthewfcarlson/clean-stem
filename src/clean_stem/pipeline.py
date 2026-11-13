@@ -281,6 +281,13 @@ def clean(path: Path, models: Models, lyrics_mode: str = "auto", backup: Path | 
         return {**result, "status": "skipped", "reason": f"unsupported format {path.suffix}"}
     if sidecar.sidecar_path(path).exists():
         return {**result, "status": "skipped", "reason": "already processed"}
+    if path.suffix.lower() == ".m4a":
+        import mutagen
+
+        # Only AAC and ALAC can be re-encoded (Tidal rips can be FLAC in MP4, which mutagen gives no length).
+        codec = getattr(mutagen.File(path).info, "codec", "")
+        if codec != "alac" and not codec.startswith("mp4a"):
+            return {**result, "status": "skipped", "reason": f"unsupported M4A codec {codec or '(unknown)'}"}
 
     # Bail early on clean songs before loading any models. Embedded lyrics
     # count if present; otherwise the synced lyrics decide.

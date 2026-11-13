@@ -131,3 +131,16 @@ def test_read_embedded_lyrics_from_m4a(tmp_path):
     del tags["\xa9lyr"]
     tags.save()
     assert read_embedded_lyrics(song) is None
+
+
+def test_clean_skips_flac_in_mp4(tmp_path):
+    from clean_stem.pipeline import clean
+
+    path = tmp_path / "tidal.m4a"
+    cmd = ["ffmpeg", "-nostdin", "-v", "error", "-y", "-f", "f32le", "-ac", "2", "-ar", str(RATE), "-i", "-",
+           "-c:a", "flac", "-strict", "-2", "-f", "mp4", str(path)]  # fmt: skip
+    subprocess.run(cmd, input=noise(2.0).T.tobytes(), check=True, capture_output=True)
+    before = path.read_bytes()
+    result = clean(path, models=None)
+    assert result["status"] == "skipped" and "fLaC" in result["reason"]
+    assert path.read_bytes() == before
