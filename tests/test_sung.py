@@ -68,6 +68,8 @@ class FakeSung:
 
     def set_reference(self, audio):
         self.references += 1
+        if isinstance(self.replies.get("reference"), Exception):
+            raise self.replies["reference"]
         return "ref"
 
     def convert(self, ref_id, stems, start, end, word, sample_rate, max_lead=0.0):
@@ -112,6 +114,15 @@ def test_sing_spans_falls_back_per_word():
     # Each may start early, but stays clear of the word before (merge gap 0.06 + 0.01).
     assert models.sung.leads == [0.43, 0.43, 0.53]
     assert spans[0].start == pytest.approx(0.07)
+
+
+def test_sing_spans_falls_back_when_reference_fails():
+    models = Models()
+    models.sung = FakeSung({"reference": SeedVCError("cannot reshape tensor of 0 elements")})
+    spans, fills = sing_spans(located([("fucker", 0.5, 1.0), ("shit", 3.5, 4.0)]), models, sung.SAMPLE_RATE)
+    assert fills == ["reversed (no voice reference: cannot reshape tensor of 0 elements)"] * 2
+    assert all(s.sung is None for s in spans)
+    assert models.sung.references == 1 and models.sung.asked == []
 
 
 def test_sing_spans_marks_compounds_with_lead():

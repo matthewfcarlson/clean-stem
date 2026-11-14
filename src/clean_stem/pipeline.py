@@ -207,15 +207,21 @@ def sing_spans(located: Located, models: Models, sample_rate: int) -> tuple[list
     if sample_rate != SAMPLE_RATE:
         return spans, [f"reversed (stems at {sample_rate} Hz)"] * len(words)
 
-    ref_id = None
+    ref_id = ref_error = None
     fills = []
     for i, (w, plan) in enumerate(zip(words, plan_sung(words))):
         if plan.substitute is None:
             fills.append(f"reversed ({plan.reason})")
             continue
-        if ref_id is None:
+        if ref_id is None and ref_error is None:
             reference = build_reference(located.stems, [(v.start, v.end) for v in words], sample_rate)
-            ref_id = models.sung.set_reference(reference)
+            try:
+                ref_id = models.sung.set_reference(reference)
+            except SeedVCError as e:  # e.g. too little clean vocal to take the voice from
+                ref_error = e
+        if ref_error is not None:
+            fills.append(f"reversed (no voice reference: {ref_error})")
+            continue
         try:
             result = models.sung.convert(
                 ref_id, _covering_stems(spans[i], located.stems), w.start, w.end, plan.substitute, sample_rate, plan.max_lead
