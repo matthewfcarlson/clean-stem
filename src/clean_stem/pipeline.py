@@ -120,6 +120,9 @@ def locate(path: Path, models: Models, lyrics_mode: str = "auto") -> Located | s
         mix, vocals, separator, stems, stereo = audio.mix, audio.vocals, audio.separator, audio.stems, audio.stereo
         separator.prefetch(stereo, separator.sample_rate, align.flagged_windows(synced, track.duration))
         words = align.align_flagged_words(synced, track.duration, [("vocals", vocals), ("mix", mix)])
+        if align.timings_look_wrong(words):
+            synced = []  # match the lyrics against the whole song instead, below
+    if synced:
         # Catch profanity the lyrics leave out: scan the full mix, then confirm
         # anything unexplained on the vocals.
         lyric_tokens = align.tokenize("\n".join(line.text for line in synced))

@@ -1,6 +1,14 @@
 import numpy as np
 
-from clean_stem.align import TimedWord, align_flagged_words, estimate_timing, match_words, pad_span, tokenize
+from clean_stem.align import (
+    TimedWord,
+    align_flagged_words,
+    estimate_timing,
+    match_words,
+    pad_span,
+    timings_look_wrong,
+    tokenize,
+)
 from clean_stem.lookup import SyncedLine
 
 
@@ -178,3 +186,25 @@ def test_fit_spans_leaves_estimates_alone():
 
     word = FlaggedWord("fag", 0, 1.0, 3.0, "estimated", "")
     assert fit_spans([word], _stems_with_vocal([(1.5, 2.5)]), 1000, 10.0) == [word]
+
+
+def test_synced_timings_that_dont_fit_the_recording_are_flagged():
+    # The recording has a spoken intro the synced lyrics don't: their chorus
+    # lines land on talking. A few common words ("you") still line up.
+    lines = [
+        SyncedLine(16.0, "Get your fuckin' hands up"),
+        SyncedLine(18.5, "Get on out of your seats"),
+        SyncedLine(24.0, "Get your fuckin' hands up"),
+        SyncedLine(26.5, "Get on out of your seats"),
+    ]
+    talk = FakeListener(
+        "I@0.2 couldn't@0.4 have@0.6 done@0.8 this@1.0 without@1.2 you@1.4 guys.@1.6",
+        "you@0.2 know,@0.4 there@0.6 are@0.8 times@1.0 that,@1.2 uh...@1.4",
+    )
+    words = align_flagged_words(lines, 60.0, [("vocals", talk)])
+    assert len(words) == 2 and all(w.line_match < 0.5 for w in words)
+    assert timings_look_wrong(words)
+
+    sung = FakeListener("Get@1.0 your@1.2 fuckin'@1.4 hands@1.6 up@1.8", "Get@1.0 your@1.2 fuckin'@1.4 hands@1.6 up!@1.8")
+    words = align_flagged_words(lines, 60.0, [("vocals", sung)])
+    assert [w.line_match for w in words] == [1.0, 1.0] and not timings_look_wrong(words)

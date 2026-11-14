@@ -64,6 +64,7 @@ class FlaggedWord:
     end: float
     method: str  # "heard", "inferred" or "estimated"
     source: str  # which listener located it, e.g. "vocals" or "mix"
+    line_match: float = 1.0  # share of its synced line's words heard in the line's window
 
 
 # Transcribes the song between two times (seconds); returned word times are
@@ -71,6 +72,8 @@ class FlaggedWord:
 Listener = Callable[[float, float], list[TimedWord]]
 
 _METHOD_RANK = {"heard": 0, "inferred": 1}
+# Below this median line match, synced timings are ignored (see timings_look_wrong).
+MIN_LINE_MATCH = 0.5
 
 
 def normalize(word: str) -> str:
@@ -79,6 +82,23 @@ def normalize(word: str) -> str:
 
 def tokenize(text: str) -> list[str]:
     return _TOKEN_RE.findall(text)
+
+
+def line_match(line_tokens: list[str], heard: list[TimedWord]) -> float:
+    """Share of a line's words found, in order, in what was heard."""
+    if not line_tokens:
+        return 1.0
+    bare = lambda w: re.sub(r"[^a-z0-9']", "", normalize(w))  # noqa: E731
+    sm = SequenceMatcher(None, [bare(t) for t in line_tokens], [bare(w.text) for w in heard], autojunk=False)
+    return sum(b.size for b in sm.get_matching_blocks()) / len(line_tokens)
+
+
+def timings_look_wrong(words: list[FlaggedWord]) -> bool:
+    """Whether the synced lyrics' timings don't fit this recording (say, a
+    version with a spoken intro): most flagged lines weren't heard where the
+    lyrics put them."""
+    matches = sorted({w.line: w.line_match for w in words}.values())
+    return len(matches) >= 2 and matches[len(matches) // 2] < MIN_LINE_MATCH
 
 
 class Transcriber:
@@ -278,8 +298,11 @@ def align_flagged_words(
         lyric_tokens = prev_tokens + tokens + next_tokens
 
         best: dict[int, tuple[float, float, str, str]] = {}
+        heard_line = 0.0
         for name, listen in listeners:
-            timings = match_words(lyric_tokens, listen(start, end), [offset + i for i in flagged])
+            heard = listen(start, end)
+            heard_line = max(heard_line, line_match(tokens, heard))
+            timings = match_words(lyric_tokens, heard, [offset + i for i in flagged])
             for i in flagged:
                 timing = timings.get(offset + i)
                 if timing is None:
@@ -296,10 +319,10 @@ def align_flagged_words(
             if i in best and best[i][:2] not in claimed:
                 word_start, word_end, method, name = best[i]
                 claimed.add((word_start, word_end))
-                found.append(FlaggedWord(tokens[i], idx, word_start, word_end, method, name))
+                found.append(FlaggedWord(tokens[i], idx, word_start, word_end, method, name, heard_line))
             else:
                 est_start, est_end = estimate_timing(line.text, i, line.time, line_end)
-                found.append(FlaggedWord(tokens[i], idx, est_start, est_end, "estimated", ""))
+                found.append(FlaggedWord(tokens[i], idx, est_start, est_end, "estimated", "", heard_line))
 
     return found
 
