@@ -22,7 +22,7 @@ from difflib import SequenceMatcher
 import numpy as np
 
 from clean_stem.align import FlaggedWord, Listener, TimedWord, match_words, normalize, tokenize
-from clean_stem.profanity import is_profane
+from clean_stem.profanity import is_profane, profane_tokens
 
 # A candidate is re-checked on the vocals this far either side of it.
 CONFIRM_PAD = 1.5
@@ -56,7 +56,7 @@ def unexplained_profanity(lyric_tokens: list[str], heard: list[TimedWord]) -> li
     for tag, i1, i2, j1, j2 in sm.get_opcodes():
         if tag == "equal" or (tag == "replace" and i2 - i1 == j2 - j1):
             continue
-        result.extend(w for w in heard[j1:j2] if is_profane(w.text))
+        result.extend(w for w in heard[j1:j2] if is_profane(w.text, heard=True))
     return result
 
 
@@ -91,7 +91,7 @@ def confirm_on_vocals(
         start = max(0.0, cand.start - CONFIRM_PAD)
         end = min(duration, cand.end + CONFIRM_PAD)
         for w in vocals(start, end):
-            if not is_profane(w.text) or overlaps(w.start, w.end, found):
+            if not is_profane(w.text, heard=True) or overlaps(w.start, w.end, found):
                 continue
             if w.end < cand.start - 0.5 or w.start > cand.end + 0.5:
                 continue
@@ -114,12 +114,12 @@ def locate_without_sync(
 
     if lyrics_text:
         tokens = tokenize(lyrics_text)
-        flagged = [i for i, t in enumerate(tokens) if is_profane(t)]
+        flagged = profane_tokens(tokens)
         for i, (start, end, method) in sorted(match_words(tokens, heard, flagged).items()):
             found.append(FlaggedWord(tokens[i], -1, start, end, method, "vocals"))
         extras = unexplained_profanity(tokens, heard)
     else:
-        extras = [w for w in heard if is_profane(w.text)]
+        extras = [w for w in heard if is_profane(w.text, heard=True)]
 
     for w in extras:
         if not overlaps(w.start, w.end, found):

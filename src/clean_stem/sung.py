@@ -46,6 +46,10 @@ SUBSTITUTES = {
     "bitches": "witches",
     "bastard": "rascal",
     "bastards": "rascals",
+    "dick": "trick",
+    "dicks": "tricks",
+    "dickhead": "knucklehead",
+    "dickheads": "knuckleheads",
 }
 
 # Seconds of the singer's real vocals sent either side of the swear. The model

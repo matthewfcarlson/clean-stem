@@ -22,7 +22,7 @@ import numpy as np
 
 from clean_stem.audio import WHISPER_SAMPLE_RATE, resample
 from clean_stem.lookup import SyncedLine
-from clean_stem.profanity import is_profane
+from clean_stem.profanity import is_profane, profane_tokens
 
 DEFAULT_MODEL = "small"
 # Seconds of audio to include before a line starts and after the next begins;
@@ -245,7 +245,7 @@ def flagged_windows(lines: list[SyncedLine], duration: float) -> list[tuple[floa
     return [
         line_window(lines, idx, duration)
         for idx, line in enumerate(lines)
-        if any(is_profane(t) for t in tokenize(line.text))
+        if profane_tokens(tokenize(line.text))
     ]
 
 
@@ -263,7 +263,7 @@ def align_flagged_words(
 
     for idx, line in enumerate(lines):
         tokens = tokenize(line.text)
-        flagged = [i for i, t in enumerate(tokens) if is_profane(t)]
+        flagged = profane_tokens(tokens)
         if not flagged:
             continue
 

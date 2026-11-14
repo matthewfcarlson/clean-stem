@@ -153,7 +153,7 @@ def locate(path: Path, models: Models, lyrics_mode: str = "auto") -> Located | s
         # too sparse to be anything but an instrumental, or the lyrics site
         # says it's instrumental (they're sometimes wrong, hence the listen).
         heard, confidence = models.transcriber.transcribe(audio.mix_audio)
-        if not any(is_profane(w.text) for w in heard):
+        if not any(is_profane(w.text, heard=True) for w in heard):
             if instrumental:
                 return Located(track, lyrics_source, [])
             if confidence >= scan.CONFIDENT_PROBABILITY:
