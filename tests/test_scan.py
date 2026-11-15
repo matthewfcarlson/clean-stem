@@ -2,7 +2,7 @@ import pytest
 import numpy as np
 
 from clean_stem.align import FlaggedWord, TimedWord, tokenize
-from clean_stem.scan import confirm_on_vocals, locate_without_sync, unexplained_profanity, vocals_level_db
+from clean_stem.scan import confirm_in_context, confirm_on_vocals, locate_without_sync, unexplained_profanity, vocals_level_db
 from clean_stem.separate import Stems
 
 RATE = 1000
@@ -80,13 +80,16 @@ def test_locate_without_sync_or_lyrics_drops_silent_hallucinations():
     assert [w.word for w in words] == ["shit"]
 
 
-def test_confirm_on_vocals_counts_lyrics_only_words_only_for_lyrics_candidates():
-    stems = loud_stems()
-    candidates = heard("dick@2.5")
+def test_confirm_in_context_keeps_guesses_heard_nearby_with_context():
+    stems = loud_stems(duration=60.0, quiet=[(40.0, 41.0)])
+    # Guessed from lyrics: one off by a second, one on talking, one where the vocals are silent.
+    guesses = heard("fuckin'@20.0 shit@30.0 dick@40.2")
+    calls = []
 
-    def vocals(start, end):
-        return heard("suck@1.0 my@1.2 dick@1.4", offset=start)
+    def mix(start, end):
+        calls.append((start, end))
+        return [w for w in heard("get@20.8 your@21.0 fucking@21.2 hands@21.6 funny@30.0 story@30.3 dick@40.4") if start <= w.start < end]
 
-    assert confirm_on_vocals(candidates, vocals, stems, RATE, 10.0) == []
-    found = confirm_on_vocals(candidates, vocals, stems, RATE, 10.0, from_lyrics=True)
-    assert [w.word for w in found] == ["dick"]
+    found = confirm_in_context(guesses, mix, stems, RATE, 60.0)
+    assert [(w.word, round(w.start, 1), w.source) for w in found] == [("fucking", 21.2, "mix-context")]
+    assert calls == [pytest.approx((8.0, 52.4))]  # overlapping windows share one listen

@@ -26,6 +26,11 @@ from clean_stem.profanity import is_profane, profane_tokens
 
 # A candidate is re-checked on the vocals this far either side of it.
 CONFIRM_PAD = 1.5
+# Seconds of the mix either side of a guessed word that confirm_in_context
+# listens to: Whisper hears far better with a few lines of context.
+CONTEXT_PAD = 12.0
+# How far (s) from a guessed word a heard swear still confirms it.
+CONTEXT_SLACK = 1.5
 # Vocals quieter than this (dBFS RMS) count as silence.
 SILENCE_DB = -40.0
 # Without lyrics, the full-mix pass decides whether separation is needed:
@@ -82,10 +87,8 @@ def confirm_on_vocals(
     stems: list,
     sample_rate: int,
     duration: float,
-    from_lyrics: bool = False,
 ) -> list[FlaggedWord]:
-    """Keep candidates that are also heard, audibly, on the isolated vocals.
-    `from_lyrics`: the candidates come from lyrics, so lyrics-only words count."""
+    """Keep candidates that are also heard, audibly, on the isolated vocals."""
     found: list[FlaggedWord] = []
     for cand in sorted(candidates, key=lambda w: w.start):
         if overlaps(cand.start, cand.end, found):
@@ -93,13 +96,43 @@ def confirm_on_vocals(
         start = max(0.0, cand.start - CONFIRM_PAD)
         end = min(duration, cand.end + CONFIRM_PAD)
         for w in vocals(start, end):
-            if not is_profane(w.text, heard=not from_lyrics) or overlaps(w.start, w.end, found):
+            if not is_profane(w.text, heard=True) or overlaps(w.start, w.end, found):
                 continue
             if w.end < cand.start - 0.5 or w.start > cand.end + 0.5:
                 continue
             if vocals_level_db(stems, w.start, w.end, sample_rate) < SILENCE_DB:
                 continue
             found.append(FlaggedWord(w.text, -1, w.start, w.end, "heard", "vocals-scan"))
+    return found
+
+
+def confirm_in_context(
+    guesses: list[TimedWord],
+    mix: Listener,
+    stems: list,
+    sample_rate: int,
+    duration: float,
+) -> list[FlaggedWord]:
+    """Keep lyrics words whose position was only guessed if a swear is heard
+    near them, listening to the mix with plenty of context; timed from what
+    was heard. Nearby guesses share a listen."""
+    found: list[FlaggedWord] = []
+    windows: list[list[float]] = []
+    for g in sorted(guesses, key=lambda w: w.start):
+        start, end = max(0.0, g.start - CONTEXT_PAD), min(duration, g.end + CONTEXT_PAD)
+        if windows and start <= windows[-1][1]:
+            windows[-1][1] = max(windows[-1][1], end)
+        else:
+            windows.append([start, end])
+    for start, end in windows:
+        for w in mix(start, end):
+            if not is_profane(w.text) or overlaps(w.start, w.end, found, slack=0.0):
+                continue
+            if not any(w.end > g.start - CONTEXT_SLACK and w.start < g.end + CONTEXT_SLACK for g in guesses):
+                continue
+            if vocals_level_db(stems, w.start, w.end, sample_rate) < SILENCE_DB:
+                continue
+            found.append(FlaggedWord(w.text, -1, w.start, w.end, "heard", "mix-context"))
     return found
 
 

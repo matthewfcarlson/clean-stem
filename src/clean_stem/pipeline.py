@@ -169,10 +169,10 @@ def locate(path: Path, models: Models, lyrics_mode: str = "auto") -> Located | s
     if lyrics_text is not None:
         # Without line timings, a word placed only by where its neighbours were
         # heard can land anywhere (an alternate take, a spoken intro); keep it
-        # only if a closer listen hears a swear there.
+        # only if a swear is heard there with the lines around it.
         heard = [w for w in words if w.method == "heard"]
         guessed = [align.TimedWord(w.word, w.start, w.end) for w in words if w.method != "heard"]
-        confirmed = scan.confirm_on_vocals(guessed, vocals, stems, separator.sample_rate, track.duration, from_lyrics=True)
+        confirmed = scan.confirm_in_context(guessed, audio.mix, stems, separator.sample_rate, track.duration)
         words = sorted(heard + [w for w in confirmed if not scan.overlaps(w.start, w.end, heard)], key=lambda w: w.start)
     words = align.fit_spans(words, stems, separator.sample_rate, track.duration)
     return Located(track, lyrics_source or "transcript", words, [], stems)
