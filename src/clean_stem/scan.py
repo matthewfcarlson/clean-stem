@@ -82,8 +82,10 @@ def confirm_on_vocals(
     stems: list,
     sample_rate: int,
     duration: float,
+    from_lyrics: bool = False,
 ) -> list[FlaggedWord]:
-    """Keep candidates that are also heard, audibly, on the isolated vocals."""
+    """Keep candidates that are also heard, audibly, on the isolated vocals.
+    `from_lyrics`: the candidates come from lyrics, so lyrics-only words count."""
     found: list[FlaggedWord] = []
     for cand in sorted(candidates, key=lambda w: w.start):
         if overlaps(cand.start, cand.end, found):
@@ -91,7 +93,7 @@ def confirm_on_vocals(
         start = max(0.0, cand.start - CONFIRM_PAD)
         end = min(duration, cand.end + CONFIRM_PAD)
         for w in vocals(start, end):
-            if not is_profane(w.text, heard=True) or overlaps(w.start, w.end, found):
+            if not is_profane(w.text, heard=not from_lyrics) or overlaps(w.start, w.end, found):
                 continue
             if w.end < cand.start - 0.5 or w.start > cand.end + 0.5:
                 continue

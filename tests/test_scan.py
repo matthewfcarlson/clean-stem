@@ -78,3 +78,15 @@ def test_locate_without_sync_or_lyrics_drops_silent_hallucinations():
     stems = loud_stems(quiet=[(0.0, 3.0)])
     words = locate_without_sync(None, heard("fuck@1 oh@5 shit@6"), stems, RATE, 10.0)
     assert [w.word for w in words] == ["shit"]
+
+
+def test_confirm_on_vocals_counts_lyrics_only_words_only_for_lyrics_candidates():
+    stems = loud_stems()
+    candidates = heard("dick@2.5")
+
+    def vocals(start, end):
+        return heard("suck@1.0 my@1.2 dick@1.4", offset=start)
+
+    assert confirm_on_vocals(candidates, vocals, stems, RATE, 10.0) == []
+    found = confirm_on_vocals(candidates, vocals, stems, RATE, 10.0, from_lyrics=True)
+    assert [w.word for w in found] == ["dick"]

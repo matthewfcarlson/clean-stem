@@ -166,6 +166,14 @@ def locate(path: Path, models: Models, lyrics_mode: str = "auto") -> Located | s
 
     vocals_transcript = vocals(0.0, track.duration)
     words = scan.locate_without_sync(lyrics_text, vocals_transcript, stems, separator.sample_rate, track.duration)
+    if lyrics_text is not None:
+        # Without line timings, a word placed only by where its neighbours were
+        # heard can land anywhere (an alternate take, a spoken intro); keep it
+        # only if a closer listen hears a swear there.
+        heard = [w for w in words if w.method == "heard"]
+        guessed = [align.TimedWord(w.word, w.start, w.end) for w in words if w.method != "heard"]
+        confirmed = scan.confirm_on_vocals(guessed, vocals, stems, separator.sample_rate, track.duration, from_lyrics=True)
+        words = sorted(heard + [w for w in confirmed if not scan.overlaps(w.start, w.end, heard)], key=lambda w: w.start)
     words = align.fit_spans(words, stems, separator.sample_rate, track.duration)
     return Located(track, lyrics_source or "transcript", words, [], stems)
 
