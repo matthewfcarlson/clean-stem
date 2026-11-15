@@ -77,7 +77,9 @@ MIN_LINE_MATCH = 0.5
 
 
 def normalize(word: str) -> str:
-    return word.lower().replace("’", "'").strip("'")
+    w = word.lower().replace("’", "'").strip("'")
+    # Lyrics write "fuckin'" where Whisper hears "fucking".
+    return w[:-2] + "ing" if len(w) > 4 and w.endswith("in") else w
 
 
 def tokenize(text: str) -> list[str]:

@@ -208,3 +208,9 @@ def test_synced_timings_that_dont_fit_the_recording_are_flagged():
     sung = FakeListener("Get@1.0 your@1.2 fuckin'@1.4 hands@1.6 up@1.8", "Get@1.0 your@1.2 fuckin'@1.4 hands@1.6 up!@1.8")
     words = align_flagged_words(lines, 60.0, [("vocals", sung)])
     assert [w.line_match for w in words] == [1.0, 1.0] and not timings_look_wrong(words)
+
+
+def test_match_words_hears_dropped_g():
+    tokens = tokenize("Get your fuckin' hands up")
+    timings = match_words(tokens, heard("Get@1.0 your@1.2 fucking@1.4 hands@1.6 up@1.8"), [2])
+    assert timings[2][2] == "heard"
